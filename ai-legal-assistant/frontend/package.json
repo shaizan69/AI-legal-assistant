@@ -1,0 +1,71 @@
+{
+  "name": "ai-legal-assistant-frontend",
+  "version": "1.0.0",
+  "description": "Frontend for AI-Powered Legal Document Assistant",
+  "private": true,
+  "dependencies": {
+    "@supabase/supabase-js": "^2.57.4",
+    "@testing-library/jest-dom": "^5.16.5",
+    "@testing-library/react": "^13.4.0",
+    "@testing-library/user-event": "^14.4.3",
+    "axios": "^1.3.4",
+    "date-fns": "^2.29.3",
+    "framer-motion": "^10.0.1",
+    "lucide-react": "^0.263.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-dropzone": "^14.2.3",
+    "react-hook-form": "^7.43.5",
+    "react-loading-skeleton": "^3.1.1",
+    "react-markdown": "^8.0.5",
+    "react-modal": "^3.16.1",
+    "react-pdf": "^6.2.2",
+    "react-query": "^3.39.3",
+    "react-router-dom": "^6.8.1",
+    "react-scripts": "5.0.1",
+    "react-select": "^5.7.0",
+    "react-syntax-highlighter": "^15.5.0",
+    "react-toastify": "^9.1.1",
+    "recharts": "^2.5.0",
+    "styled-components": "^5.3.9",
+    "web-vitals": "^2.1.4"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject",
+    "lint": "eslint src --ext .js,.jsx,.ts,.tsx",
+    "lint:fix": "eslint src --ext .js,.jsx,.ts,.tsx --fix",
+    "format": "prettier --write src/**/*.{js,jsx,ts,tsx,css,md}"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "devDependencies": {
+    "@types/react": "^18.0.28",
+    "@types/react-dom": "^18.0.11",
+    "@types/react-modal": "^3.16.0",
+    "@types/react-syntax-highlighter": "^15.5.6",
+    "eslint": "^8.35.0",
+    "eslint-config-prettier": "^8.6.0",
+    "eslint-plugin-prettier": "^4.2.1",
+    "prettier": "^2.8.4"
+  },
+  "proxy": "http://localhost:8000"
+}

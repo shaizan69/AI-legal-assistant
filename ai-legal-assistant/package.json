@@ -1,0 +1,15 @@
+{
+  "name": "ai-legal-assistant",
+  "version": "1.0.0",
+  "description": "A production-grade, end-to-end system for analyzing legal documents using AI. The system allows users to upload contracts/agreements (PDF/DOCX), extract text, analyze clauses, summarize content, detect risks, and perform Q&A with documents using Large Language Models.",
+  "main": "test_supabase.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.57.4"
+  }
+}
