@@ -94,11 +94,11 @@ async def init_db():
             # Enable pgvector
             conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
 
-            # Add vector column if missing (adjust to 1024 for e5-large-v2)
+            # Add vector column if missing (adjust to 384 for all-MiniLM-L6-v2)
             conn.execute(text(
                 """
                 ALTER TABLE document_chunks
-                ADD COLUMN IF NOT EXISTS embedding_vec vector(1024)
+                ADD COLUMN IF NOT EXISTS embedding_vec vector(384)
                 """
             ))
 

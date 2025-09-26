@@ -4,6 +4,7 @@ Supabase-based embedding service using pgvector (no OpenAI; local sentence-trans
 
 import logging
 import json
+import os
 from typing import List, Optional, Tuple, Dict, Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -48,21 +49,16 @@ class SupabaseEmbeddingService:
             # Initialize sentence-transformers
             self._sentence_transformer = _lazy_import_sentence_transformers()
             if self._sentence_transformer:
-                # Switch to intfloat/e5-large-v2 (1024-dim)
-                self.embedding_model = self._sentence_transformer('intfloat/e5-large-v2')
-                self.dimension = 1024
-                self.uses_e5 = True
-                logger.info("Using e5-large-v2 embeddings with Supabase")
+                # Use the smaller, already-downloaded model to avoid large downloads
+                logger.info("Using all-MiniLM-L6-v2 (already downloaded, no network required)")
+                self.embedding_model = self._sentence_transformer('all-MiniLM-L6-v2')
+                self.dimension = 384
+                self.uses_e5 = False
+                logger.info("Using all-MiniLM-L6-v2 embeddings with Supabase")
 
-                # Initialize a lightweight CrossEncoder reranker
-                self._cross_encoder = _lazy_import_cross_encoder()
-                if self._cross_encoder:
-                    try:
-                        # Small, fast reranker. Swap to a larger model if you prefer.
-                        self._reranker = self._cross_encoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
-                        logger.info("CrossEncoder reranker initialized: ms-marco-MiniLM-L-6-v2")
-                    except Exception as e:
-                        logger.warning(f"Failed to initialize CrossEncoder reranker: {e}")
+                # Skip CrossEncoder to avoid additional downloads
+                logger.info("Skipping CrossEncoder to avoid network downloads")
+                self._reranker = None
             else:
                 self.embedding_model = None
                 self.dimension = 384
@@ -263,5 +259,20 @@ class SupabaseEmbeddingService:
             if 'db' in locals():
                 db.close()
 
-# Global embedding service instance
-embedding_service = SupabaseEmbeddingService()
+# Global embedding service instance (lazy initialization)
+_embedding_service = None
+
+def get_embedding_service():
+    """Get embedding service instance with lazy initialization"""
+    global _embedding_service
+    if _embedding_service is None:
+        _embedding_service = SupabaseEmbeddingService()
+    return _embedding_service
+
+# For backward compatibility - use lazy initialization
+class LazyEmbeddingService:
+    """Lazy wrapper for embedding service"""
+    def __getattr__(self, name):
+        return getattr(get_embedding_service(), name)
+
+embedding_service = LazyEmbeddingService()
