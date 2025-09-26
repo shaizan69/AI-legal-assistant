@@ -84,6 +84,7 @@ class EmbeddingService:
                 # Try sentence transformers
                 self._sentence_transformer = _lazy_import_sentence_transformers()
                 if self._sentence_transformer:
+                    # Use the model name directly (will download to D: drive cache)
                     self.embedding_model = self._sentence_transformer('all-MiniLM-L6-v2')
                     self.dimension = 384  # all-MiniLM-L6-v2 dimension
                     logger.info("Using HuggingFace sentence-transformers")

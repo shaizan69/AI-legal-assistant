@@ -1,12 +1,25 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { MessageSquare, Send, Bot, User } from 'lucide-react';
+import { Send, Bot, User, Loader2, Copy, Check } from 'lucide-react';
 import { qaAPI } from '../api/qa';
+import './QASession.css';
 
 const QASession = () => {
   const { sessionId } = useParams();
   const [question, setQuestion] = useState('');
   const [messages, setMessages] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [copiedMessageId, setCopiedMessageId] = useState(null);
+  const messagesEndRef = useRef(null);
+  const textareaRef = useRef(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
 
   useEffect(() => {
     // Load existing questions for the session
@@ -26,21 +39,24 @@ const QASession = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!question.trim()) return;
+    if (!question.trim() || isLoading) return;
 
+    const userQuestion = question.trim();
+    
     // Add user message
     const userMessage = {
       id: Date.now(),
       type: 'user',
-      content: question,
+      content: userQuestion,
       timestamp: new Date(),
     };
     
     setMessages(prev => [...prev, userMessage]);
     setQuestion('');
+    setIsLoading(true);
 
     try {
-      const res = await qaAPI.askQuestion(question, Number(sessionId));
+      const res = await qaAPI.askQuestion(userQuestion, Number(sessionId));
       const aiMessage = {
         id: Date.now() + 1,
         type: 'ai',
@@ -50,57 +66,209 @@ const QASession = () => {
       setMessages(prev => [...prev, aiMessage]);
     } catch (e) {
       console.error('Failed to ask question', e);
+      const errorMessage = {
+        id: Date.now() + 1,
+        type: 'ai',
+        content: 'Sorry, I encountered an error while processing your question. Please try again.',
+        timestamp: new Date(),
+        isError: true,
+      };
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setIsLoading(false);
     }
   };
 
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit(e);
+    }
+  };
+
+  const handleTextareaChange = (e) => {
+    setQuestion(e.target.value);
+    // Auto-resize textarea
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+    }
+  };
+
+  const copyToClipboard = async (content, messageId) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopiedMessageId(messageId);
+      setTimeout(() => setCopiedMessageId(null), 2000);
+    } catch (err) {
+      console.error('Failed to copy text: ', err);
+    }
+  };
+
+  const formatTime = (timestamp) => {
+    return timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
   return (
-    <div className="qa-session">
-      <div className="qa-header">
-        <h1 className="qa-title">Q&A Session</h1>
-        <p className="qa-subtitle">Ask questions about your document</p>
+    <div className="chat-container">
+      {/* Header */}
+      <div className="chat-header">
+        <div className="chat-header-content">
+          <div className="chat-title-section">
+            <h1 className="chat-title">Document Q&A</h1>
+            <p className="chat-subtitle">Ask questions about your document</p>
+          </div>
+        </div>
       </div>
 
-      <div className="qa-container">
-        <div className="messages-container">
-          {messages.length === 0 ? (
-            <div className="empty-messages">
-              <MessageSquare size={48} className="empty-icon" />
-              <h3>Start a conversation</h3>
-              <p>Ask questions about your document to get AI-powered insights.</p>
+      {/* Messages Area */}
+      <div className="chat-messages">
+        {messages.length === 0 ? (
+          <div className="empty-chat">
+            <div className="empty-chat-content">
+              <div className="empty-chat-icon">
+                <Bot size={48} />
+              </div>
+              <h3 className="empty-chat-title">Start a conversation</h3>
+              <p className="empty-chat-description">
+                Ask questions about your document to get AI-powered insights and analysis.
+              </p>
+              <div className="suggested-questions">
+                <p className="suggested-title">Try asking:</p>
+                <div className="suggestion-chips">
+                  <button 
+                    className="suggestion-chip"
+                    onClick={() => setQuestion("What are the main points of this document?")}
+                  >
+                    What are the main points of this document?
+                  </button>
+                  <button 
+                    className="suggestion-chip"
+                    onClick={() => setQuestion("Are there any risks or concerns mentioned?")}
+                  >
+                    Are there any risks or concerns mentioned?
+                  </button>
+                  <button 
+                    className="suggestion-chip"
+                    onClick={() => setQuestion("Can you summarize the key terms?")}
+                  >
+                    Can you summarize the key terms?
+                  </button>
+                </div>
+              </div>
             </div>
-          ) : (
-            <div className="messages-list">
-              {messages.map((message) => (
-                <div key={message.id} className={`message ${message.type}`}>
+          </div>
+        ) : (
+          <div className="messages-list">
+            {messages.map((message) => (
+              <div key={message.id} className={`message-wrapper ${message.type}`}>
+                <div className="message">
                   <div className="message-avatar">
-                    {message.type === 'user' ? <User size={20} /> : <Bot size={20} />}
+                    {message.type === 'user' ? (
+                      <div className="user-avatar">
+                        <User size={16} />
+                      </div>
+                    ) : (
+                      <div className="ai-avatar">
+                        <Bot size={16} />
+                      </div>
+                    )}
                   </div>
                   <div className="message-content">
-                    <div className="message-text">{message.content}</div>
-                    <div className="message-time">
-                      {message.timestamp.toLocaleTimeString()}
+                    <div className="message-header">
+                      <span className="message-sender">
+                        {message.type === 'user' ? 'You' : 'AI Assistant'}
+                      </span>
+                      <span className="message-time">
+                        {formatTime(message.timestamp)}
+                      </span>
+                    </div>
+                    <div className={`message-text ${message.isError ? 'error-message' : ''}`}>
+                      {message.content}
+                    </div>
+                    {message.type === 'ai' && (
+                      <div className="message-actions">
+                        <button
+                          className="action-button"
+                          onClick={() => copyToClipboard(message.content, message.id)}
+                          title="Copy message"
+                        >
+                          {copiedMessageId === message.id ? (
+                            <Check size={14} />
+                          ) : (
+                            <Copy size={14} />
+                          )}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+            
+            {/* Loading indicator */}
+            {isLoading && (
+              <div className="message-wrapper ai">
+                <div className="message">
+                  <div className="message-avatar">
+                    <div className="ai-avatar">
+                      <Bot size={16} />
+                    </div>
+                  </div>
+                  <div className="message-content">
+                    <div className="message-header">
+                      <span className="message-sender">AI Assistant</span>
+                    </div>
+                    <div className="typing-indicator">
+                      <div className="typing-dots">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                      </div>
                     </div>
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
+              </div>
+            )}
+            
+            <div ref={messagesEndRef} />
+          </div>
+        )}
+      </div>
 
-        <form className="question-form" onSubmit={handleSubmit}>
-          <div className="input-container">
-            <input
-              type="text"
+      {/* Input Area */}
+      <div className="chat-input-container">
+        <form className="chat-input-form" onSubmit={handleSubmit}>
+          <div className="input-wrapper">
+            <textarea
+              ref={textareaRef}
               value={question}
-              onChange={(e) => setQuestion(e.target.value)}
+              onChange={handleTextareaChange}
+              onKeyPress={handleKeyPress}
               placeholder="Ask a question about the document..."
-              className="question-input"
+              className="chat-input"
+              rows="1"
+              disabled={isLoading}
             />
-            <button type="submit" className="send-button" disabled={!question.trim()}>
-              <Send size={20} />
+            <button 
+              type="submit" 
+              className="send-button" 
+              disabled={!question.trim() || isLoading}
+              title="Send message"
+            >
+              {isLoading ? (
+                <Loader2 size={20} className="animate-spin" />
+              ) : (
+                <Send size={20} />
+              )}
             </button>
           </div>
         </form>
+        <div className="input-footer">
+          <p className="input-hint">
+            Press Enter to send, Shift+Enter for new line
+          </p>
+        </div>
       </div>
     </div>
   );

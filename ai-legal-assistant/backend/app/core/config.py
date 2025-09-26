@@ -2,7 +2,7 @@
 Application configuration and settings
 """
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List, Optional
 import os
 from pathlib import Path
@@ -10,11 +10,13 @@ from pathlib import Path
 
 class Settings(BaseSettings):
     """Application settings with .env file support"""
-    
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-    
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore",
+    )
+
     # Application
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
@@ -30,13 +32,15 @@ class Settings(BaseSettings):
     # AI Services
     # Embeddings use sentence-transformers locally
     HUGGINGFACE_API_KEY: Optional[str] = None
-    # Gemini configuration (primary)
-    GEMINI_API_KEY: Optional[str] = None
-    GEMINI_MODEL: str = "gemini-1.5-flash-8b"
-    # Groq disabled by default to avoid overlap
-    GROQ_API_KEY: Optional[str] = None
-    GROQ_MODEL: Optional[str] = None
-    # Legacy field (unused)
+    
+    # Ollama Configuration (Primary LLM)
+    OLLAMA_URL: str = "http://localhost:11434"
+    MISTRAL_MODEL: str = "mistral-legal-q4"  # Base model identifier (without tag)
+    LEGAL_MODEL: str = "mistral-legal-q4"    # Legal specialized model identifier
+    USE_LORA: bool = False  # Mistral-7B is efficient enough without LoRA
+    OLLAMA_PATH: str = "D:\\Ollama"
+    
+    # Legacy fields (unused)
     EMBEDDING_MODEL: str = ""
     LLM_MODEL: str = ""
     
@@ -73,15 +77,34 @@ class Settings(BaseSettings):
     # Redis (Optional)
     REDIS_URL: Optional[str] = None
     
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
-    
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # Create necessary directories
         os.makedirs(self.UPLOAD_DIR, exist_ok=True)
         os.makedirs(os.path.dirname(self.LOG_FILE), exist_ok=True)
+        
+        # Set Hugging Face cache environment variables
+        self._configure_huggingface_cache()
+    
+    def _configure_huggingface_cache(self):
+        """Configure Hugging Face cache directories to use D:\Hugging Face"""
+        hf_home = os.environ.get('HF_HOME', 'D:\\Hugging Face')
+        
+        # Set environment variables for Hugging Face libraries
+        os.environ['HF_HOME'] = hf_home
+        os.environ['TRANSFORMERS_CACHE'] = os.path.join(hf_home, 'huggingface')
+        os.environ['HF_HUB_CACHE'] = os.path.join(hf_home, 'huggingface')
+        os.environ['HF_DATASETS_CACHE'] = os.path.join(hf_home, 'datasets')
+        os.environ['TORCH_HOME'] = os.path.join(hf_home, 'torch')
+        
+        # Create cache directories if they don't exist
+        for cache_dir in [
+            os.environ['TRANSFORMERS_CACHE'],
+            os.environ['HF_HUB_CACHE'],
+            os.environ['HF_DATASETS_CACHE'],
+            os.environ['TORCH_HOME']
+        ]:
+            os.makedirs(cache_dir, exist_ok=True)
 
 
 # Global settings instance
