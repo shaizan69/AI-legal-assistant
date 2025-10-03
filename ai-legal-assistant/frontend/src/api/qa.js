@@ -28,6 +28,8 @@ export const qaAPI = {
     const response = await api.post('/api/qa/ask', {
       question,
       session_id: sessionId,
+    }, {
+      timeout: 180000, // 3 minutes timeout for LLM requests
     });
     return response.data;
   },

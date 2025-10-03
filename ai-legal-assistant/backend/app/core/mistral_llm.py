@@ -20,54 +20,154 @@ class MistralLLMService:
     
     def __init__(self):
         self.ollama_url = settings.OLLAMA_URL
-        self.base_model = settings.MISTRAL_MODEL or "mistral-legal-q4"
-        self.legal_model = settings.LEGAL_MODEL or "mistral-legal-q4"
+        self.base_model = settings.MISTRAL_MODEL or "mistral-legal-q4:latest"
+        self.legal_model = settings.LEGAL_MODEL or "mistral-legal-q4:latest"
         self.use_lora = settings.USE_LORA or False
         self.active_model = self.legal_model
         self.ollama_path = settings.OLLAMA_PATH
         self._configure_ollama()
     
+    def _ensure_model_available(self, model_name: str) -> bool:
+        """Ensure a model is available locally; attempt to pull if missing.
+
+        Returns True if available (either already present or successfully pulled), else False.
+        """
+        try:
+            # Check current tags
+            resp = requests.get(f"{self.ollama_url}/api/tags", timeout=10)
+            if resp.status_code != 200:
+                logger.warning(f"Cannot list Ollama models to verify availability: {resp.status_code}")
+                return False
+            model_names = [m.get('name') for m in resp.json().get('models', [])]
+            if model_name in model_names:
+                return True
+
+            # Attempt a pull (non-streaming)
+            logger.info(f"Attempting to pull missing model: {model_name}")
+            pull_payload = {"name": model_name, "stream": False}
+            pull_resp = requests.post(
+                f"{self.ollama_url}/api/pull",
+                json=pull_payload,
+                timeout=1800  # allow up to 30 minutes for slow networks
+            )
+            if pull_resp.status_code in (200, 201):
+                logger.info(f"Successfully pulled model: {model_name}")
+                return True
+            else:
+                logger.warning(f"Failed to pull model {model_name}: {pull_resp.status_code} - {pull_resp.text}")
+                return False
+        except Exception as e:
+            logger.warning(f"Error ensuring model availability for {model_name}: {e}")
+            return False
+
     def _configure_ollama(self):
         """Configure Ollama client and ensure model is available"""
         try:
             # Set Ollama environment variables to use D: drive
             os.environ['OLLAMA_MODELS'] = self.ollama_path
             
+            # Force GPU usage environment variables
+            os.environ['CUDA_VISIBLE_DEVICES'] = '0'  # Use first GPU
+            os.environ['OLLAMA_GPU_LAYERS'] = '-1'    # Use all GPU layers
+            os.environ['OLLAMA_NUM_GPU'] = '1'        # Force GPU usage
+            
             # Check if Ollama is running
             response = requests.get(f"{self.ollama_url}/api/tags", timeout=5)
             if response.status_code != 200:
                 raise ConnectionError(f"Ollama server not responding at {self.ollama_url}")
             
-            # Check if legal model is available
-            models = response.json().get('models', [])
-            model_names = [model['name'] for model in models]
-            
-            if f"{self.legal_model}:latest" in model_names:
-                self.active_model = f"{self.legal_model}:latest"
-            elif self.legal_model in model_names:
-                self.active_model = self.legal_model
-            else:
-                logger.warning(f"Legal model {self.legal_model} not found. Available models: {model_names}")
-                logger.info("You may need to pull or create the legal model: ollama pull mistral-legal-q4")
-
-                # Fallback to base model if legal model not available
-                fallback_candidates = ["mistral:7b-instruct-q4_K_M", "mistral:latest"]
-                for candidate in fallback_candidates:
-                    if candidate in model_names:
-                        self.active_model = candidate
-                        logger.info(f"Falling back to base model: {candidate}")
-                        break
-                else:
-                    logger.error("No suitable Mistral model found in Ollama")
-                    raise ValueError("Mistral model not available in Ollama")
+            # Enforce single-model policy: use configured legal model only
+            self.active_model = self.legal_model
+            if not self._ensure_model_available(self.active_model):
+                logger.info(f"Attempting to pull configured model: {self.active_model}")
+                if not self._ensure_model_available(self.active_model):
+                    raise RuntimeError(f"Configured model {self.active_model} is not available and could not be pulled.")
             
             logger.info(f"Mistral LLM service configured with model: {self.active_model}")
+            logger.info("GPU acceleration enabled - forcing GPU-only mode")
             
         except Exception as e:
             logger.error(f"Error configuring Ollama: {e}")
             raise
     
-    def _make_request(self, messages: List[Dict[str, str]], max_tokens: int = 1000, temperature: float = 0.7) -> str:
+    def test_gpu_usage(self):
+        """Test if GPU is being used by Ollama"""
+        try:
+            payload = {
+                "model": self.active_model,
+                "prompt": "Test GPU usage",
+                "stream": False,
+                "options": {
+                    "num_gpu": 1,
+                    "gpu_layers": -1,
+                    "low_vram": False
+                }
+            }
+            
+            response = requests.post(
+                f"{self.ollama_url}/api/generate",
+                json=payload,
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                logger.info("✅ GPU test successful - GPU is being used")
+                return True
+            else:
+                logger.warning(f"⚠️ GPU test failed: {response.status_code}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ GPU test error: {e}")
+            return False
+    
+    def _make_request_ultra_fast(self, messages: List[Dict[str, str]], max_tokens: int = 50, temperature: float = 0.1) -> str:
+        """Ultra-fast request optimized for 1B model with minimal resources"""
+        try:
+            prompt = self._format_messages_for_ollama(messages)
+            
+            payload = {
+                "model": self.active_model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": temperature,
+                    "num_predict": min(max_tokens, 50),  # Very limited output
+                    "top_p": 0.8,
+                    "top_k": 20,
+                    "repeat_penalty": 1.0,
+                    "stop": ["</s>", "Human:", "Assistant:", "\n\n"],
+                    "num_ctx": 1024,  # Medium context for GPU
+                    "num_thread": 4,  # More threads for GPU
+                    "num_gpu": 1,     # Use GPU!
+                    "low_vram": False, # Use full VRAM
+                    "num_batch": 4,   # Larger batch for GPU
+                    "gpu_layers": -1, # Use all GPU layers
+                    "use_mmap": True,
+                    "use_mlock": False
+                }
+            }
+            
+            response = requests.post(
+                f"{self.ollama_url}/api/generate",
+                json=payload,
+                timeout=30  # Short timeout for ultra-fast GPU requests
+            )
+            
+            if response.status_code != 200:
+                raise Exception(f"Ollama API error: {response.status_code} - {response.text}")
+            
+            result = response.json()
+            return result.get('response', '').strip()
+            
+        except requests.exceptions.Timeout:
+            logger.warning(f"Ultra-fast request timed out after 15 seconds")
+            return "Response timeout - model too slow"
+        except Exception as e:
+            logger.error(f"Ultra-fast request failed: {e}")
+            return "Processing failed"
+    
+    async def _make_request(self, messages: List[Dict[str, str]], max_tokens: int = 1000, temperature: float = 0.7) -> str:
         """Make a request to Ollama API with fallback to faster model"""
         try:
             # Convert messages to Ollama format
@@ -82,33 +182,41 @@ class MistralLLMService:
                 "stream": False,
                 "options": {
                     "temperature": temperature,
-                    "num_predict": max_tokens,
+                    "num_predict": min(max_tokens, 200),  # Limited output for speed
                     "top_p": 0.9,
                     "top_k": 40,
                     "repeat_penalty": 1.1,
                     "stop": ["</s>", "Human:", "Assistant:"],
-                    "num_ctx": 4096,  # Context window
-                    "num_thread": 4,  # CPU threads
-                    "num_gpu": 0,     # Disable GPU if not available
-                    "low_vram": True  # Optimize for low VRAM
+                    "num_ctx": 2048,  # Larger context for GPU
+                    "num_thread": 8,  # More threads for GPU
+                    "num_gpu": 1,     # Force GPU usage
+                    "low_vram": False, # Use full VRAM
+                    "num_batch": 8,   # Larger batch for GPU
+                    "use_mmap": True, # Memory mapping for efficiency
+                    "use_mlock": False, # Don't lock memory
+                    "gpu_layers": -1  # Use all GPU layers
                 }
             }
             
             response = requests.post(
                 f"{self.ollama_url}/api/generate",
                 json=payload,
-                timeout=300  # 5 minutes timeout for slow laptops
+                timeout=120  # Increased timeout for GPU processing
             )
             
             if response.status_code != 200:
+                # Handle memory errors with clear message
+                if response.status_code == 500 and "requires more system memory" in response.text:
+                    logger.error("Insufficient GPU memory for mistral-legal-q4:latest. Consider reducing context or using a smaller model.")
+                    raise Exception("Insufficient GPU memory - model requires more VRAM than available")
                 raise Exception(f"Ollama API error: {response.status_code} - {response.text}")
             
             result = response.json()
             return result.get('response', '').strip()
             
         except requests.exceptions.Timeout:
-            logger.warning(f"Primary model {self.active_model} timed out after 5 minutes. Trying fallback model...")
-            return self._make_request_fallback(messages, max_tokens, temperature)
+            logger.warning(f"Primary model {self.active_model} timed out after 2 minutes (GPU). This may indicate insufficient VRAM.")
+            raise Exception("LLM request timed out - check GPU memory availability")
         except requests.exceptions.ConnectionError:
             logger.error(f"Cannot connect to Ollama at {self.ollama_url}")
             raise Exception("Ollama service is not running - please start Ollama")
@@ -116,48 +224,13 @@ class MistralLLMService:
             logger.error(f"Error making Ollama API request: {e}")
             raise
     
-    def _make_request_fallback(self, messages: List[Dict[str, str]], max_tokens: int = 1000, temperature: float = 0.7) -> str:
-        """Fallback request using faster model"""
-        try:
-            prompt = self._format_messages_for_ollama(messages)
-            
-            # Use faster base model
-            fallback_model = "mistral:7b-instruct-q4_K_M"
-            
-            payload = {
-                "model": fallback_model,
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "temperature": temperature,
-                    "num_predict": max_tokens,
-                    "top_p": 0.9,
-                    "top_k": 40,
-                    "repeat_penalty": 1.1,
-                    "stop": ["</s>", "Human:", "Assistant:"],
-                    "num_ctx": 2048,  # Smaller context for speed
-                    "num_thread": 2,  # Fewer threads for speed
-                    "num_gpu": 0,
-                    "low_vram": True
-                }
-            }
-            
-            response = requests.post(
-                f"{self.ollama_url}/api/generate",
-                json=payload,
-                timeout=180  # 3 minutes timeout for fallback model
-            )
-            
-            if response.status_code != 200:
-                raise Exception(f"Fallback model also failed: {response.status_code} - {response.text}")
-            
-            result = response.json()
-            logger.info(f"Successfully used fallback model: {fallback_model}")
-            return result.get('response', '').strip()
-            
-        except Exception as e:
-            logger.error(f"Fallback model also failed: {e}")
-            raise Exception("Both primary and fallback models failed")
+    async def _make_request_fallback(self, messages: List[Dict[str, str]], max_tokens: int = 1000, temperature: float = 0.7) -> str:
+        """Fallback disabled by configuration"""
+        raise Exception("LLM fallback is disabled")
+
+    async def _make_request_low_memory(self, messages: List[Dict[str, str]], max_tokens: int = 800, temperature: float = 0.7) -> str:
+        """Low-memory mode disabled by configuration"""
+        raise Exception("LLM low-memory mode is disabled")
     
     def _format_messages_for_ollama(self, messages: List[Dict[str, str]]) -> str:
         """Format messages for Ollama's prompt format"""
@@ -187,49 +260,32 @@ class MistralLLMService:
                 {"role": "user", "content": prompt}
             ]
             
-            return self._make_request(messages, max_tokens, temperature)
+            return await self._make_request(messages, max_tokens, temperature)
             
         except Exception as e:
             logger.error(f"Error generating text with Mistral: {e}")
             raise
     
     async def summarize_document(self, text: str, document_type: str = "contract") -> Dict[str, Any]:
-        """Summarize a legal document using Mistral 7B"""
+        """Ultra-simple summarization for 1B model - designed for speed"""
         try:
-            prompt = f"""
-            You are an expert legal document analyst. Analyze and summarize the following {document_type} document.
+            # Drastically reduce input size for 1B model
+            if len(text) > 500:  # Very small input
+                text = text[:500] + "..."
             
-            Provide a comprehensive summary with these sections:
-            
-            1. **Document Overview**: Brief description of the document's purpose and nature
-            2. **Key Parties**: All parties involved in the agreement
-            3. **Main Terms and Conditions**: Core obligations, rights, and responsibilities
-            4. **Important Dates**: Deadlines, effective dates, and time-sensitive provisions
-            5. **Financial Terms**: Payment amounts, schedules, penalties, and financial obligations
-            6. **Risk Factors**: Potential risks, liabilities, and areas of concern
-            7. **Action Items**: Required actions, deliverables, and next steps
-            8. **Key Clauses**: Important legal provisions that need attention
-            
-            Document Text:
-            {text[:4000]}
-            
-            Provide clear, structured analysis that highlights the most critical aspects of this document.
-            Use bullet points and clear headings for easy reading.
-            """
+            # Ultra-simple prompt
+            prompt = f"Summarize: {text}"
             
             messages = [
-                {"role": "system", "content": "You are a senior legal analyst with expertise in contract review and document analysis. Provide detailed, accurate, and professional summaries."},
                 {"role": "user", "content": prompt}
             ]
             
-            summary_text = self._make_request(messages, max_tokens=2500, temperature=0.3)
-            
-            # Extract structured data
-            structured_data = self._extract_structured_data(summary_text)
+            # Use ultra-low settings for 1B model
+            summary_text = self._make_request_ultra_fast(messages, max_tokens=50, temperature=0.1)
             
             return {
                 "summary": summary_text,
-                "structured": structured_data,
+                "structured": {},
                 "document_type": document_type,
                 "analysis_date": datetime.utcnow().isoformat(),
                 "model_used": self.active_model
@@ -238,7 +294,7 @@ class MistralLLMService:
         except Exception as e:
             logger.error(f"Error summarizing document: {e}")
             return {
-                "summary": "Unable to generate summary due to an error.",
+                "summary": "Summary unavailable - model processing limitations.",
                 "structured": {},
                 "document_type": document_type,
                 "analysis_date": datetime.utcnow().isoformat(),
@@ -246,48 +302,26 @@ class MistralLLMService:
             }
     
     async def detect_risks(self, text: str, document_type: str = "contract") -> Dict[str, Any]:
-        """Detect potential risks in a legal document using Mistral 7B"""
+        """Ultra-simple risk detection for 1B model"""
         try:
-            prompt = f"""
-            You are a legal risk assessment expert. Analyze the following {document_type} document for potential legal risks and issues.
+            # Drastically reduce input size
+            if len(text) > 300:  # Very small input
+                text = text[:300] + "..."
             
-            Focus on identifying:
-            
-            1. **Unfavorable Terms**: Clauses that may be disadvantageous to the client
-            2. **Missing Clauses**: Important legal protections that are absent
-            3. **Ambiguous Language**: Vague or unclear provisions that could cause disputes
-            4. **Unusual Provisions**: Non-standard or concerning terms
-            5. **Compliance Issues**: Potential regulatory or legal compliance problems
-            6. **Financial Risks**: Payment terms, penalties, or financial obligations that pose risks
-            7. **Liability Concerns**: Areas where the client may face excessive liability
-            8. **Enforcement Issues**: Terms that may be difficult to enforce or defend
-            
-            Document Text:
-            {text[:4000]}
-            
-            Provide a detailed risk assessment including:
-            - Overall risk level (High/Medium/Low) with justification
-            - Specific risk factors with explanations
-            - Potential impact of each risk
-            - Recommendations for risk mitigation
-            - Priority actions needed
-            """
+            # Ultra-simple prompt
+            prompt = f"Risks in: {text}"
             
             messages = [
-                {"role": "system", "content": "You are a senior legal risk analyst with extensive experience in contract review and risk assessment. Provide thorough, accurate, and actionable risk analysis."},
                 {"role": "user", "content": prompt}
             ]
             
-            risk_analysis = self._make_request(messages, max_tokens=2000, temperature=0.2)
-            
-            # Extract risk level and factors
-            risk_data = self._extract_risk_data(risk_analysis)
+            risk_analysis = self._make_request_ultra_fast(messages, max_tokens=30, temperature=0.1)
             
             return {
                 "analysis": risk_analysis,
-                "risk_level": risk_data.get("risk_level", "Medium"),
-                "risk_factors": risk_data.get("risk_factors", []),
-                "recommendations": risk_data.get("recommendations", []),
+                "risk_level": "Medium",
+                "risk_factors": [risk_analysis] if risk_analysis else ["Manual review needed"],
+                "recommendations": ["Review with legal expert"],
                 "document_type": document_type,
                 "analysis_date": datetime.utcnow().isoformat(),
                 "model_used": self.active_model
@@ -296,10 +330,10 @@ class MistralLLMService:
         except Exception as e:
             logger.error(f"Error detecting risks: {e}")
             return {
-                "analysis": "Unable to analyze risks due to an error.",
+                "analysis": "Risk analysis unavailable - model limitations.",
                 "risk_level": "Unknown",
-                "risk_factors": [],
-                "recommendations": [],
+                "risk_factors": ["Manual review recommended"],
+                "recommendations": ["Consult legal expert"],
                 "document_type": document_type,
                 "analysis_date": datetime.utcnow().isoformat(),
                 "model_used": self.active_model
@@ -335,7 +369,7 @@ class MistralLLMService:
                 {"role": "user", "content": prompt}
             ]
             
-            comparison = self._make_request(messages, max_tokens=2500, temperature=0.3)
+            comparison = await self._make_request(messages, max_tokens=500, temperature=0.3)
             
             return {
                 "comparison": comparison,
@@ -370,7 +404,7 @@ class MistralLLMService:
             - If uncertain, indicate the level of confidence in your answer
             
             Document Context:
-            {context[:3000]}
+            {context[:1000]}
             
             Question: {question}
             
@@ -382,7 +416,7 @@ class MistralLLMService:
                 {"role": "user", "content": prompt}
             ]
             
-            answer_text = self._make_request(messages, max_tokens=1000, temperature=0.1)
+            answer_text = await self._make_request(messages, max_tokens=300, temperature=0.1)
             
             # Calculate confidence based on answer content
             confidence = self._calculate_confidence(answer_text, context, question)

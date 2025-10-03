@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Debug Auth</title>
+</head>
+<body>
+    <h1>Debug Authentication</h1>
+    <div id="status"></div>
+    <button onclick="testAuth()">Test Auth</button>
+    <button onclick="clearAuth()">Clear Auth</button>
+    <button onclick="setTestToken()">Set Test Token</button>
+    
+    <script>
+        function testAuth() {
+            const token = localStorage.getItem('token');
+            const status = document.getElementById('status');
+            
+            if (!token) {
+                status.innerHTML = '❌ No token found in localStorage';
+                return;
+            }
+            
+            status.innerHTML = '✅ Token found: ' + token.substring(0, 50) + '...';
+            
+            // Test API call
+            fetch('http://localhost:8000/api/qa/sessions', {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            })
+            .then(response => {
+                if (response.ok) {
+                    status.innerHTML += '<br>✅ API call successful';
+                } else {
+                    status.innerHTML += '<br>❌ API call failed: ' + response.status;
+                }
+            })
+            .catch(error => {
+                status.innerHTML += '<br>❌ API call error: ' + error.message;
+            });
+        }
+        
+        function clearAuth() {
+            localStorage.removeItem('token');
+            document.getElementById('status').innerHTML = '🗑️ Token cleared';
+        }
+        
+        function setTestToken() {
+            const token = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0QGV4YW1wbGUuY29tIiwiZXhwIjoxNzU4OTIxNzQxfQ.U-p61czAQG0RaDsSAqZP9Oy8TargIWuNndbDBWoTdnA';
+            localStorage.setItem('token', token);
+            document.getElementById('status').innerHTML = '✅ Test token set';
+        }
+    </script>
+</body>
+</html>

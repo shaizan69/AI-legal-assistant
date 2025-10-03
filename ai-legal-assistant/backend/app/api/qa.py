@@ -197,7 +197,7 @@ async def ask_question(
         question.confidence_score = answer_result["confidence"]
         question.context_used = context
         question.processing_time = processing_time
-        question.model_used = "gpt-3.5-turbo"
+        question.model_used = answer_result["model_used"]  # Use actual model from LLM service
         question.answered_at = datetime.utcnow()
         
         # Update session

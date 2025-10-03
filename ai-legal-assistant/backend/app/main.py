@@ -12,7 +12,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from app.core.config import settings
-from app.core.database import init_db
+from app.core.database import init_db, check_db_connection
 from app.api import upload, summarize, risks, compare, qa, auth
 
 
@@ -89,11 +89,13 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint with database connectivity check"""
+    db_healthy = check_db_connection()
     return {
-        "status": "healthy",
+        "status": "healthy" if db_healthy else "degraded",
         "service": "ai-legal-assistant",
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "database": "connected" if db_healthy else "disconnected"
     }
 
 
