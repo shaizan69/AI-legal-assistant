@@ -23,10 +23,13 @@ api.interceptors.request.use(
 // Response interceptor to handle auth errors
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem('token');
-      window.location.href = '/login';
+      // Only redirect to login if we're not already on the login page
+      if (window.location.pathname !== '/login') {
+        localStorage.removeItem('token');
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(error);
   }

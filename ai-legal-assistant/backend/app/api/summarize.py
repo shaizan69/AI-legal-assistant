@@ -86,7 +86,7 @@ async def summarize_document(
             existing_summary.structured_data = summary_result["structured"]
             existing_summary.confidence_score = 0.8  # Default confidence
             existing_summary.processing_time = processing_time
-            existing_summary.model_used = "gpt-3.5-turbo"
+            existing_summary.model_used = summary_result["model_used"]
         else:
             summary_analysis = DocumentAnalysis(
                 document_id=document.id,
@@ -94,7 +94,7 @@ async def summarize_document(
                 summary=summary_result["summary"],
                 structured_data=summary_result["structured"],
                 confidence_score=0.8,
-                model_used="gpt-3.5-turbo",
+                model_used=summary_result["model_used"],
                 processing_time=processing_time
             )
             db.add(summary_analysis)

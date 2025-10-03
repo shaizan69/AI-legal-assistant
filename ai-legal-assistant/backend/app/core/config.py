@@ -11,7 +11,7 @@ from pathlib import Path
 class Settings(BaseSettings):
     """Application settings with .env file support"""
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file="../.env",
         env_file_encoding="utf-8",
         case_sensitive=True,
         extra="ignore",
@@ -33,12 +33,10 @@ class Settings(BaseSettings):
     # Embeddings use sentence-transformers locally
     HUGGINGFACE_API_KEY: Optional[str] = None
     
-    # Ollama Configuration (Primary LLM)
-    OLLAMA_URL: str = "http://localhost:11434"
-    MISTRAL_MODEL: str = "mistral-legal-q4"  # Base model identifier (without tag)
-    LEGAL_MODEL: str = "mistral-legal-q4"    # Legal specialized model identifier
-    USE_LORA: bool = False  # Mistral-7B is efficient enough without LoRA
-    OLLAMA_PATH: str = "D:\\Ollama"
+    # Groq API Configuration (Primary LLM)
+    GROQ_API_KEY: str = ""
+    GROQ_MODEL: str = ""
+    GROQ_BASE_URL: str = ""
     
     # Legacy fields (unused)
     EMBEDDING_MODEL: str = ""

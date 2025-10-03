@@ -100,7 +100,7 @@ async def compare_documents(
             existing_comparison.recommendations = comparison_result["structured"].get("recommendations", [])
             existing_comparison.similarity_score = similarity_score
             existing_comparison.processing_time = processing_time
-            existing_comparison.model_used = "gpt-3.5-turbo"
+            existing_comparison.model_used = comparison_result["model_used"]
         else:
             comparison = Comparison(
                 user_id=current_user.id,
@@ -114,7 +114,7 @@ async def compare_documents(
                 comparison_type=request.comparison_type,
                 similarity_score=similarity_score,
                 processing_time=processing_time,
-                model_used="gpt-3.5-turbo"
+                model_used=comparison_result["model_used"]
             )
             db.add(comparison)
         

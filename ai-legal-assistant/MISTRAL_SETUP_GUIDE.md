@@ -1,10 +1,11 @@
-# Mistral 7B Setup Guide for Legal Document Analysis
+# Mistral Legal Q4 Setup Guide for Legal Document Analysis
 
-This guide will help you set up Mistral 7B quantized 4-bit with Ollama for your legal document analysis system. Mistral 7B is much more efficient and takes less space than Llama 3-8B.
+This guide will help you set up Mistral Legal Q4 with Ollama for your legal document analysis system. Mistral Legal Q4 is a specialized legal model optimized for document analysis.
 
-## Why Mistral 7B Legal?
+## Why Mistral Legal Q4?
 
-- **Smaller Size**: ~4.1GB vs ~8GB for Llama 3-8B
+- **Specialized Legal Model**: Optimized for legal document analysis
+- **Efficient Size**: ~4.4GB quantized model
 - **Better Performance**: More efficient on laptops
 - **Quantized**: 4-bit quantization reduces memory usage
 - **VERY HIGH QUALITY**: Specialized legal prompts for superior analysis
@@ -56,31 +57,13 @@ set OLLAMA_MODELS=D:\Ollama
 ollama serve
 ```
 
-### 4. Pull Mistral 7B Model
+### 4. Pull Mistral Legal Q4 Model
 ```cmd
-ollama pull mistral:7b-instruct-q4_K_M
+ollama pull mistral-legal-q4:latest
 ```
 
-### 5. Create Legal Analysis Model
-Create `D:\Ollama\Modelfile.legal`:
-```
-FROM mistral:7b-instruct-q4_K_M
-
-SYSTEM """You are a specialized legal document analysis assistant. You excel at:
-
-1. Contract Analysis: Identifying key terms, parties, obligations, and risks
-2. Legal Document Summarization: Creating clear, structured summaries
-3. Risk Assessment: Identifying potential legal risks and issues
-4. Document Comparison: Comparing legal documents and highlighting differences
-5. Q&A: Answering questions about legal documents with precise, evidence-based responses
-
-You provide accurate, professional, and detailed analysis of legal documents including contracts, agreements, policies, and other legal texts. Always cite specific clauses, sections, or provisions when possible."""
-```
-
-Create the model:
-```cmd
-ollama create mistral-legal-q4 -f D:\Ollama\Modelfile.legal
-```
+### 5. Verify Model Installation
+The Mistral Legal Q4 model is already optimized for legal analysis. No additional configuration needed.
 
 ## Configuration
 
@@ -89,13 +72,13 @@ Your `.env` file is already configured:
 ```env
 # Ollama Configuration (Primary LLM)
 OLLAMA_URL=http://localhost:11434
-MISTRAL_MODEL=mistral-legal-q4
+MISTRAL_MODEL=mistral-legal-q4:latest
 USE_LORA=false
 OLLAMA_PATH=D:\Ollama
 ```
 
 ### Backend Configuration
-The system is configured to use **only** Mistral 7B as the LLM:
+The system is configured to use **only** Mistral Legal Q4 as the LLM:
 - `backend/app/core/config.py` - Main configuration
 - `backend/app/core/mistral_llm.py` - Mistral service implementation
 - `backend/app/core/llm.py` - Main LLM service
@@ -164,18 +147,18 @@ python scripts\setup_mistral.py
    - Check Windows Firewall settings
 
 2. **Model not found**
-   - Ensure `mistral:7b-instruct-q4_K_M` is pulled: `ollama pull mistral:7b-instruct-q4_K_M`
+   - Ensure `mistral-legal-q4:latest` is pulled: `ollama pull mistral-legal-q4:latest`
    - Check model list: `ollama list`
 
 3. **Memory issues**
-   - Mistral 7B uses much less RAM than Llama 3-8B
+   - Mistral Legal Q4 uses optimized memory settings
    - Close other applications if needed
-   - Consider using CPU-only mode
+   - GPU acceleration is enabled for better performance
 
 4. **Slow performance**
-   - Mistral 7B is faster than Llama 3-8B
+   - Mistral Legal Q4 is optimized for legal analysis
    - Ensure you have enough RAM (8GB+)
-   - Use GPU acceleration if available
+   - GPU acceleration is enabled by default
 
 ### Logs
 
@@ -193,9 +176,9 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 
 ### 2. Memory Optimization
 For systems with limited RAM:
-- Mistral 7B Q4 already uses minimal memory
-- Reduce context length if needed
-- Use smaller batch sizes
+- Mistral Legal Q4 already uses optimized memory settings
+- GPU acceleration reduces CPU memory usage
+- Low VRAM mode enabled for 4GB GPUs
 
 ### 3. Storage Optimization
 - All models stored on D: drive
@@ -205,27 +188,15 @@ For systems with limited RAM:
 ## Advanced Configuration
 
 ### Custom Modelfile
-Create custom models for specific legal domains:
-
-```
-FROM mistral:7b-instruct-q4_K_M
-
-SYSTEM """You are a contract law specialist focusing on:
-- Employment contracts
-- Service agreements
-- Partnership agreements
-- Commercial leases
-
-Provide detailed analysis with specific legal precedents and recommendations."""
-```
+The Mistral Legal Q4 model is already optimized for legal analysis. No additional configuration needed.
 
 ### API Configuration
 Configure Ollama API settings in `backend/app/core/config.py`:
 
 ```python
 OLLAMA_URL = "http://localhost:11434"
-MISTRAL_MODEL = "mistral:7b-instruct-q4_K_M"
-LEGAL_MODEL = "mistral-legal-q4"
+MISTRAL_MODEL = "mistral-legal-q4:latest"
+LEGAL_MODEL = "mistral-legal-q4:latest"
 USE_LORA = False
 OLLAMA_PATH = "D:\\Ollama"
 ```
@@ -242,10 +213,10 @@ If you encounter issues:
 
 ## Next Steps
 
-1. **Run the setup script** to install and configure Mistral 7B
+1. **Run the setup script** to install and configure Mistral Legal Q4
 2. **Test the basic functionality** with the setup script
 3. **Upload a legal document** and test analysis features
-4. **Monitor performance** - should be faster than Llama 3-8B
-5. **Enjoy the efficiency** - much smaller footprint and better performance
+4. **Monitor performance** - optimized for legal analysis
+5. **Enjoy the efficiency** - specialized legal model with GPU acceleration
 
-The system is now ready to provide accurate, AI-powered legal document analysis using Mistral 7B with efficient 4-bit quantization!
+The system is now ready to provide accurate, AI-powered legal document analysis using Mistral Legal Q4 with GPU acceleration!

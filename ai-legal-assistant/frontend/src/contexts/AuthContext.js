@@ -24,8 +24,11 @@ export const AuthProvider = ({ children }) => {
           setUser(userData);
         } catch (error) {
           console.error('Auth initialization failed:', error);
-          localStorage.removeItem('token');
-          setToken(null);
+          // Only clear token if it's a 401 error (unauthorized)
+          if (error.response?.status === 401) {
+            localStorage.removeItem('token');
+            setToken(null);
+          }
         }
       }
       setLoading(false);

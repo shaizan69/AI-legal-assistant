@@ -33,6 +33,19 @@ const QASession = () => {
         setMessages(mapped);
       } catch(e) {
         console.error('Failed to load session messages', e);
+        if (e.response?.status === 401) {
+          console.log('Session expired, redirecting to login...');
+          // Don't show error message for auth failures, let the interceptor handle it
+        } else {
+          // Show user-friendly error for other issues
+          const errorMsg = {
+            id: 'load-error',
+            type: 'ai',
+            content: 'Failed to load previous messages. Please refresh the page.',
+            timestamp: new Date(),
+          };
+          setMessages([errorMsg]);
+        }
       }
     })();
   }, [sessionId]);
@@ -54,26 +67,56 @@ const QASession = () => {
     setMessages(prev => [...prev, userMessage]);
     setQuestion('');
     setIsLoading(true);
+    
+    // Add loading message
+    const loadingMessage = {
+      id: 'loading',
+      type: 'ai',
+      content: '🤔 Thinking... This may take up to 2 minutes for complex questions.',
+      timestamp: new Date(),
+    };
+    setMessages(prev => [...prev, loadingMessage]);
 
     try {
       const res = await qaAPI.askQuestion(userQuestion, Number(sessionId));
-      const aiMessage = {
-        id: Date.now() + 1,
-        type: 'ai',
-        content: res.answer || 'No answer returned.',
-        timestamp: new Date(),
-      };
-      setMessages(prev => [...prev, aiMessage]);
+      
+      // Remove loading message and add actual response
+      setMessages(prev => {
+        const withoutLoading = prev.filter(msg => msg.id !== 'loading');
+        const aiMessage = {
+          id: Date.now() + 1,
+          type: 'ai',
+          content: res.answer || 'No answer returned.',
+          timestamp: new Date(),
+        };
+        return [...withoutLoading, aiMessage];
+      });
     } catch (e) {
       console.error('Failed to ask question', e);
-      const errorMessage = {
-        id: Date.now() + 1,
-        type: 'ai',
-        content: 'Sorry, I encountered an error while processing your question. Please try again.',
-        timestamp: new Date(),
-        isError: true,
-      };
-      setMessages(prev => [...prev, errorMessage]);
+      let errorMessage = 'Sorry, I encountered an error while processing your question. Please try again.';
+      
+      if (e.code === 'ECONNABORTED' || e.message?.includes('timeout')) {
+        errorMessage = 'The request timed out. The AI is taking longer than expected. Please try again with a simpler question.';
+      } else if (e.response?.status === 401) {
+        errorMessage = 'Your session has expired. Please refresh the page and login again.';
+      } else if (e.response?.status === 500) {
+        errorMessage = 'Server error. Please try again in a moment.';
+      } else if (e.response?.status === 408) {
+        errorMessage = 'Request timeout. The AI is taking too long to respond. Please try again.';
+      }
+      
+      // Remove loading message and add error message
+      setMessages(prev => {
+        const withoutLoading = prev.filter(msg => msg.id !== 'loading');
+        const errorMsg = {
+          id: Date.now() + 1,
+          type: 'ai',
+          content: errorMessage,
+          timestamp: new Date(),
+          isError: true,
+        };
+        return [...withoutLoading, errorMsg];
+      });
     } finally {
       setIsLoading(false);
     }
