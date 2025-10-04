@@ -585,11 +585,36 @@ async def delete_document(
                 detail="Document not found"
             )
         
+        # Cascade-delete dependent records before document deletion (avoid FK violations)
+        doc_id = document.id
+
+        # Delete Q&A questions first, then sessions (FK constraint: questions reference sessions)
+        from app.models.analysis import QASession, QAQuestion
+        
+        # Get session IDs for this document
+        session_ids = db.query(QASession.id).filter(QASession.document_id == doc_id).all()
+        session_ids_list = [s.id for s in session_ids]
+        
+        if session_ids_list:
+            # Delete Q&A questions for these sessions
+            db.query(QAQuestion).filter(QAQuestion.session_id.in_(session_ids_list)).delete()
+            
+            # Now delete Q&A sessions
+            db.query(QASession).filter(QASession.document_id == doc_id).delete()
+
+        # Delete document chunks
+        db.query(DocumentChunk).filter(DocumentChunk.document_id == doc_id).delete()
+
+        # Delete embeddings from vector store
+        try:
+            embedding_service.delete_chunks(document_id=doc_id)
+        except Exception:
+            pass
+
         # Remove file from Supabase Storage
         if document.supabase_path:
             await supabase_service.delete_file(document.supabase_path)
-        
-        # Delete from database (cascade will handle related records)
+
         db.delete(document)
         db.commit()
         

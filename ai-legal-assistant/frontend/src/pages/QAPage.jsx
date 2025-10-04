@@ -15,14 +15,19 @@ const QAPage = () => {
     { refetchOnWindowFocus: false }
   );
 
-  // If navigated with ?document=ID, create a session and redirect to it
+  // If navigated with ?document=ID, reuse existing session for that document or create one
   useEffect(() => {
     const docId = searchParams.get('document');
     if (!docId) return;
+    if (isLoading) return; // wait for sessions list
     (async () => {
       try {
+        const existing = sessions.find((s) => s.document_id === Number(docId));
+        if (existing) {
+          navigate(`/qa/${existing.id}`, { replace: true });
+          return;
+        }
         const session = await qaAPI.createSession(Number(docId));
-        // refresh list cache
         queryClient.invalidateQueries(['qa-sessions-list']);
         navigate(`/qa/${session.id}`, { replace: true });
       } catch (e) {
@@ -30,8 +35,7 @@ const QAPage = () => {
         alert('Unable to start Q&A session. Ensure the document has finished processing.');
       }
     })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [searchParams, sessions, isLoading, navigate, queryClient]);
 
   return (
     <div className="qa-page" style={{padding: '1.5rem'}}>

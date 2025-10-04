@@ -240,9 +240,6 @@ const Home = () => {
                 </div>
                 
                 <div className="table-cell document-cell">
-                  <div className="document-icon">
-                    <FileText size={20} />
-                  </div>
                   <div className="document-info">
                     <div className="document-title">{document.title}</div>
                     <div className="document-meta">
