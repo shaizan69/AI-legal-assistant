@@ -110,13 +110,12 @@ const Dashboard = () => {
     },
   ];
 
-  const recentDocuments = documents.slice(0, 5);
-  const recentSessions = sessions.slice(0, 3);
+  const recentDocuments = documents.slice(0, 2);
+  const recentSessions = sessions.slice(0, 2);
 
   return (
     <div className="dashboard">
       <div className="dashboard-header">
-        <h1 className="dashboard-title">Dashboard</h1>
         <p className="dashboard-subtitle">
           Welcome back! Here's what's happening with your legal documents.
         </p>
@@ -179,24 +178,24 @@ const Dashboard = () => {
               ))}
             </div>
           ) : recentDocuments.length > 0 ? (
-            <div className="documents-list">
+            <div className="sessions-list">
               {recentDocuments.map((document) => (
-                <div key={document.id} className="document-item">
-                  <div className="document-icon">
+                <div key={document.id} className="session-item">
+                  <div className="session-icon">
                     <FileText size={20} />
                   </div>
-                  <div className="document-content">
-                    <h3 className="document-title">{document.title}</h3>
-                    <p className="document-meta">
-                      {document.document_type || 'Document'} • {formatFileSize(document.file_size)}
+                  <div className="session-content">
+                    <h3 className="session-title">{document.title}</h3>
+                    <p className="session-meta">
+                      {document.document_type || 'Document'}
                     </p>
-                    <div className="document-status">
+                    <div className="session-status">
                       <span className={`status-badge status-${document.processing_status}`}>
                         {document.processing_status}
                       </span>
                     </div>
                   </div>
-                  <div className="document-actions">
+                  <div className="session-actions">
                     <Link to={`/document/${document.id}`} className="btn btn-sm btn-outline">
                       View
                     </Link>
