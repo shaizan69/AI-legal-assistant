@@ -132,17 +132,17 @@ const LandingChat = () => {
           <div style={{
             width:'40px',
             height:'40px',
-            background:'linear-gradient(135deg, #10a37f, #059669)',
+            background:'linear-gradient(135deg, #3b82f6, #1d4ed8)',
             borderRadius:'12px',
             display:'flex',
             alignItems:'center',
             justifyContent:'center',
-            boxShadow:'0 4px 12px rgba(16, 163, 127, 0.3)'
+            boxShadow:'0 4px 12px rgba(59, 130, 246, 0.3)'
           }}>
             <Bot size={20} color="#ffffff"/>
           </div>
-          <h1 style={{fontSize:'20px', fontWeight:'700', margin:0, background:'linear-gradient(135deg, #ffffff, #10a37f)', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent'}}>
-            AI Legal Assistant
+          <h1 style={{fontSize:'20px', fontWeight:'700', margin:0, background:'linear-gradient(135deg, #ffffff, #3b82f6)', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent'}}>
+            Legal Assistant
           </h1>
         </div>
         <div style={{display:'flex', gap:16}}>
@@ -202,13 +202,13 @@ const LandingChat = () => {
               <div style={{
                 width:'80px',
                 height:'80px',
-                background:'linear-gradient(135deg, #10a37f, #059669)',
+                background:'linear-gradient(135deg, #3b82f6, #1d4ed8)',
                 borderRadius:'20px',
                 display:'flex',
                 alignItems:'center',
                 justifyContent:'center',
                 margin:'0 auto 24px',
-                boxShadow:'0 8px 32px rgba(16, 163, 127, 0.3)'
+                boxShadow:'0 8px 32px rgba(59, 130, 246, 0.3)'
               }}>
                 <Bot size={32} color="#ffffff"/>
               </div>
@@ -216,7 +216,7 @@ const LandingChat = () => {
                 fontSize:'48px', 
                 fontWeight:'700', 
                 marginBottom:'16px', 
-                background:'linear-gradient(135deg, #ffffff, #10a37f)', 
+                background:'linear-gradient(135deg, #ffffff, #3b82f6)', 
                 WebkitBackgroundClip:'text', 
                 WebkitTextFillColor:'transparent',
                 letterSpacing:'-0.02em'
