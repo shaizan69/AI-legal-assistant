@@ -104,10 +104,23 @@ def extract_metadata_from_text(text: str) -> Dict[str, Any]:
 
 
 def chunk_text(text: str, chunk_size: int = 800, overlap: int = 160) -> List[str]:
-    """Split text into overlapping chunks for processing"""
+    """Split text into overlapping chunks for processing with improved legal document handling"""
     if not text:
         return []
     
+    # First, try to split by legal document sections
+    sections = split_by_legal_sections(text)
+    if len(sections) > 1:
+        chunks = []
+        for section in sections:
+            if len(section.split()) <= chunk_size:
+                chunks.append(section.strip())
+            else:
+                # Split large sections by sentences
+                chunks.extend(split_by_sentences(section, chunk_size, overlap))
+        return chunks
+    
+    # Fallback to word-based chunking
     words = text.split()
     chunks = []
     
@@ -115,6 +128,67 @@ def chunk_text(text: str, chunk_size: int = 800, overlap: int = 160) -> List[str
         chunk = ' '.join(words[i:i + chunk_size])
         if chunk.strip():
             chunks.append(chunk.strip())
+    
+    return chunks
+
+
+def split_by_legal_sections(text: str) -> List[str]:
+    """Split text by common legal document sections"""
+    import re
+    
+    # Common legal section patterns
+    section_patterns = [
+        r'\n\s*(?:ARTICLE|Article)\s+[IVX\d]+[\.:]?\s*',  # Articles
+        r'\n\s*(?:SECTION|Section)\s+[IVX\d]+[\.:]?\s*',  # Sections
+        r'\n\s*(?:CLAUSE|Clause)\s+[IVX\d]+[\.:]?\s*',    # Clauses
+        r'\n\s*(?:PARAGRAPH|Paragraph)\s+[IVX\d]+[\.:]?\s*', # Paragraphs
+        r'\n\s*(?:SUBSECTION|Subsection)\s+[IVX\d]+[\.:]?\s*', # Subsections
+        r'\n\s*(?:PART|Part)\s+[IVX\d]+[\.:]?\s*',         # Parts
+        r'\n\s*(?:CHAPTER|Chapter)\s+[IVX\d]+[\.:]?\s*',   # Chapters
+        r'\n\s*(?:SCHEDULE|Schedule)\s+[IVX\d]+[\.:]?\s*', # Schedules
+        r'\n\s*(?:APPENDIX|Appendix)\s+[IVX\d]+[\.:]?\s*', # Appendices
+    ]
+    
+    # Try each pattern
+    for pattern in section_patterns:
+        sections = re.split(pattern, text, flags=re.IGNORECASE)
+        if len(sections) > 1:
+            return [s.strip() for s in sections if s.strip()]
+    
+    return [text]  # Return original text if no sections found
+
+
+def split_by_sentences(text: str, chunk_size: int, overlap: int) -> List[str]:
+    """Split text by sentences while respecting chunk size"""
+    import re
+    
+    # Split by sentences (period, exclamation, question mark)
+    sentences = re.split(r'[.!?]+\s+', text)
+    
+    chunks = []
+    current_chunk = []
+    current_size = 0
+    
+    for sentence in sentences:
+        sentence_words = sentence.split()
+        sentence_size = len(sentence_words)
+        
+        if current_size + sentence_size > chunk_size and current_chunk:
+            # Create chunk
+            chunk_text = ' '.join(current_chunk)
+            chunks.append(chunk_text)
+            
+            # Start new chunk with overlap
+            overlap_words = current_chunk[-overlap:] if len(current_chunk) >= overlap else current_chunk
+            current_chunk = overlap_words + sentence_words
+            current_size = len(current_chunk)
+        else:
+            current_chunk.extend(sentence_words)
+            current_size += sentence_size
+    
+    # Add remaining chunk
+    if current_chunk:
+        chunks.append(' '.join(current_chunk))
     
     return chunks
 

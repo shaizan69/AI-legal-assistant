@@ -31,14 +31,14 @@ class SupabaseService:
         return self.client is not None
     
     async def upload_file(self, file_path: str, file_content: bytes, content_type: str = "application/octet-stream") -> Optional[dict]:
-        """Upload file to Supabase Storage"""
+        """Upload file to Supabase Storage. Returns a simple dict on success."""
         if not self.is_available():
             logger.error("Supabase service not available")
             return None
         
         try:
-            # Upload file to Supabase Storage
-            result = self.client.storage.from_(self.bucket).upload(
+            # Upload file to Supabase Storage (newer client returns an object, not a dict)
+            self.client.storage.from_(self.bucket).upload(
                 path=file_path,
                 file=file_content,
                 file_options={
@@ -46,13 +46,8 @@ class SupabaseService:
                     "cache-control": "3600"
                 }
             )
-            
-            if result.get('error'):
-                logger.error(f"Supabase upload error: {result['error']}")
-                return None
-            
             logger.info(f"File uploaded to Supabase: {file_path}")
-            return result
+            return {"path": file_path}
             
         except Exception as e:
             logger.error(f"Error uploading file to Supabase: {e}")
@@ -65,14 +60,17 @@ class SupabaseService:
         
         try:
             result = self.client.storage.from_(self.bucket).get_public_url(file_path)
-            # get_public_url returns a dict with 'publicURL' key
-            if isinstance(result, dict) and 'publicURL' in result:
-                return result['publicURL']
-            elif isinstance(result, str):
+            # Newer client returns {'data': {'publicUrl': '...'}, 'error': None}
+            if isinstance(result, dict):
+                if 'publicURL' in result:  # older shape
+                    return result['publicURL']
+                data = result.get('data') or {}
+                if isinstance(data, dict) and ('publicUrl' in data or 'publicURL' in data):
+                    return data.get('publicUrl') or data.get('publicURL')
+            if isinstance(result, str):
                 return result
-            else:
-                logger.error(f"Unexpected result from get_public_url: {result}")
-                return None
+            logger.error(f"Unexpected result from get_public_url: {result}")
+            return None
         except Exception as e:
             logger.error(f"Error getting file URL from Supabase: {e}")
             return None
@@ -102,12 +100,8 @@ class SupabaseService:
             return False
         
         try:
-            result = self.client.storage.from_(self.bucket).remove([file_path])
-            
-            if result.get('error'):
-                logger.error(f"Supabase delete error: {result['error']}")
-                return False
-            
+            # Newer client raises on error; returns a dict or None otherwise
+            self.client.storage.from_(self.bucket).remove([file_path])
             logger.info(f"File deleted from Supabase: {file_path}")
             return True
             

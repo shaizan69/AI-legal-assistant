@@ -8,7 +8,8 @@ import 'react-toastify/dist/ReactToastify.css';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
-import Home from './pages/Home';
+// import Home from './pages/Home';
+import LandingChat from './pages/LandingChat';
 import Dashboard from './pages/Dashboard';
 import DocumentView from './pages/DocumentView';
 import QASession from './pages/QASession';
@@ -89,17 +90,13 @@ function App() {
                 } 
               />
               
-              {/* Protected Routes */}
+              {/* Public Landing Chat at root */}
               <Route 
                 path="/" 
-                element={
-                  <ProtectedRoute>
-                    <Layout>
-                      <Home />
-                    </Layout>
-                  </ProtectedRoute>
-                } 
+                element={<LandingChat />} 
               />
+
+              {/* Protected Routes */}
               <Route 
                 path="/dashboard" 
                 element={

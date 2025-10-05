@@ -11,7 +11,8 @@ from pathlib import Path
 class Settings(BaseSettings):
     """Application settings with .env file support"""
     model_config = SettingsConfigDict(
-        env_file="../.env",
+        # Load env from project root (ai-legal-assistant/.env)
+        env_file="D:/Legal assistant/ai-legal-assistant/.env",
         env_file_encoding="utf-8",
         case_sensitive=True,
         extra="ignore",
@@ -62,8 +63,8 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./uploads"
     
     # Supabase Configuration
-    SUPABASE_URL: str = "https://iuxqomqbxfoetnieaorw.supabase.co"
-    SUPABASE_KEY: str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml1eHFvbXFieGZvZXRuaWVhb3J3Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1ODMxNzA1OSwiZXhwIjoyMDczODkzMDU5fQ.hB0ZH93Wv-KCwwTQZBfJ2xia-kH75s8xYLBx6q5SoT4"
+    SUPABASE_URL: str = ""
+    SUPABASE_KEY: str = ""
     SUPABASE_BUCKET: str = "legal-documents"
     USE_SUPABASE: bool = True
     

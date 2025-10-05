@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 
 from app.core.config import settings
 from app.core.database import init_db, check_db_connection
-from app.api import upload, summarize, risks, compare, qa, auth
+from app.api import upload, summarize, risks, compare, qa, auth, free
 
 
 # Configure logging
@@ -74,6 +74,7 @@ app.include_router(summarize.router, prefix="/api/summarize", tags=["Document Su
 app.include_router(risks.router, prefix="/api/risks", tags=["Risk Detection"])
 app.include_router(compare.router, prefix="/api/compare", tags=["Contract Comparison"])
 app.include_router(qa.router, prefix="/api/qa", tags=["Q&A"])
+app.include_router(free.router, prefix="/api", tags=["Free Chat"])
 
 
 @app.get("/")

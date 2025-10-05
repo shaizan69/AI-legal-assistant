@@ -161,8 +161,8 @@ class SupabaseEmbeddingService:
             
             # Build query with optional document filter
             where_clause = ""
-            # Retrieve a larger candidate set for reranking
-            candidate_k = max(k * 6, 50)
+            # Retrieve a larger candidate set for reranking (increased for better accuracy)
+            candidate_k = max(k * 8, 80)
             params = {'query_vector': query_vector_str, 'limit': candidate_k}
             
             if document_id:
