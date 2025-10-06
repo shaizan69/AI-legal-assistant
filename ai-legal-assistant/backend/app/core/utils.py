@@ -108,8 +108,11 @@ def chunk_text(text: str, chunk_size: int = 800, overlap: int = 160) -> List[str
     if not text:
         return []
     
+    # Enhance text for better financial information capture
+    enhanced_text = enhance_financial_chunking(text)
+    
     # First, try to split by legal document sections
-    sections = split_by_legal_sections(text)
+    sections = split_by_legal_sections(enhanced_text)
     if len(sections) > 1:
         chunks = []
         for section in sections:
@@ -121,7 +124,7 @@ def chunk_text(text: str, chunk_size: int = 800, overlap: int = 160) -> List[str
         return chunks
     
     # Fallback to word-based chunking
-    words = text.split()
+    words = enhanced_text.split()
     chunks = []
     
     for i in range(0, len(words), chunk_size - overlap):
@@ -389,3 +392,52 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
+
+
+def enhance_financial_chunking(text: str) -> str:
+    """Enhance text to better capture financial information for chunking"""
+    # Add markers around financial terms to improve chunking and retrieval
+    financial_patterns = [
+        # Dollar amounts and currency
+        (r'\$[\d,]+(?:\.\d{2})?', r'[AMOUNT: \g<0>]'),
+        (r'[\d,]+(?:\.\d{2})?\s*(?:USD|EUR|GBP|CAD|AUD|JPY|CHF|CNY)', r'[AMOUNT: \g<0>]'),
+        # Indian currency format
+        (r'[\d,]+(?:\.\d{2})?/-', r'[AMOUNT: \g<0>]'),
+        (r'[\d,]+(?:\.\d{2})?\s*/-', r'[AMOUNT: \g<0>]'),
+        (r'[\d,]+(?:\.\d{2})?\s*rupees?', r'[AMOUNT: \g<0>]'),
+        (r'[\d,]+(?:\.\d{2})?\s*rs\.?', r'[AMOUNT: \g<0>]'),
+        
+        # Written amounts
+        (r'(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion|trillion)\s+(?:dollars?|USD|EUR|GBP)', r'[AMOUNT: \g<0>]'),
+        
+        # Financial terms with amounts
+        (r'(?:payment|fee|cost|charge|price|amount|total|sum|value|worth)\s*:?\s*[\d,]+(?:\.\d{2})?', r'[FINANCIAL: \g<0>]'),
+        (r'(?:payment|fee|cost|charge|price|amount|total|sum|value|worth)\s*of\s*[\d,]+(?:\.\d{2})?', r'[FINANCIAL: \g<0>]'),
+        
+        # Payment terms
+        (r'(?:due|payable|payable on|payment due)\s*:?\s*[\d,]+(?:\.\d{2})?', r'[PAYMENT: \g<0>]'),
+        (r'(?:due|payable|payable on|payment due)\s*on\s*[\d,]+(?:\.\d{2})?', r'[PAYMENT: \g<0>]'),
+        
+        # Penalties and fees
+        (r'(?:late fee|penalty|interest|fine)\s*:?\s*[\d,]+(?:\.\d{2})?', r'[PENALTY: \g<0>]'),
+        (r'(?:late fee|penalty|interest|fine)\s*of\s*[\d,]+(?:\.\d{2})?', r'[PENALTY: \g<0>]'),
+        
+        # Percentage-based amounts
+        (r'[\d,]+(?:\.\d{2})?\s*%', r'[PERCENTAGE: \g<0>]'),
+        (r'(?:interest|rate|commission|fee)\s*of\s*[\d,]+(?:\.\d{2})?\s*%', r'[PERCENTAGE: \g<0>]'),
+        
+        # Financial sections and clauses
+        (r'(?:payment|financial|cost|fee|charge|amount|total|sum|price|value|worth|budget|expense|revenue|income|salary|wage|bonus|penalty|fine|refund|deposit|advance|installment|interest|tax|commission|royalty|rent|lease|purchase|sale|compensation|benefits|allowance|stipend|pension|retirement|insurance|premium|deductible|coverage|claim|settlement|award|damages|restitution|reimbursement|subsidy|grant|funding|sponsorship|endorsement|licensing|franchise|dividend|share|stock|bond|security|asset|liability|equity|capital|fund|treasury|budget|forecast|projection|estimate|quotation|proposal|bid|tender|contract|agreement|deal|transaction|exchange|trade|commerce|business|enterprise|corporation|company|firm|partnership|sole proprietorship|llc|inc|corp|ltd|llp|pllc|pc|pa)\s+(?:terms?|conditions?|clauses?|provisions?|sections?|articles?|paragraphs?)', r'[FINANCIAL_SECTION: \g<0>]'),
+        
+        # Financial obligations
+        (r'(?:obligation|responsibility|liability|debt|credit|loan|mortgage|investment|profit|loss|earnings|compensation|benefits|allowance|stipend|pension|retirement|insurance|premium|deductible|coverage|claim|settlement|award|damages|restitution|reimbursement|subsidy|grant|funding|sponsorship|endorsement|licensing|franchise|dividend|share|stock|bond|security|asset|liability|equity|capital|fund|treasury|budget|forecast|projection|estimate|quotation|proposal|bid|tender|contract|agreement|deal|transaction|exchange|trade|commerce|business|enterprise|corporation|company|firm|partnership|sole proprietorship|llc|inc|corp|ltd|llp|pllc|pc|pa)\s+(?:obligation|responsibility|liability|debt|credit|loan|mortgage|investment|profit|loss|earnings|compensation|benefits|allowance|stipend|pension|retirement|insurance|premium|deductible|coverage|claim|settlement|award|damages|restitution|reimbursement|subsidy|grant|funding|sponsorship|endorsement|licensing|franchise|dividend|share|stock|bond|security|asset|liability|equity|capital|fund|treasury|budget|forecast|projection|estimate|quotation|proposal|bid|tender|contract|agreement|deal|transaction|exchange|trade|commerce|business|enterprise|corporation|company|firm|partnership|sole proprietorship|llc|inc|corp|ltd|llp|pllc|pc|pa)', r'[FINANCIAL_OBLIGATION: \g<0>]'),
+        
+        # Financial calculations
+        (r'(?:total|sum|subtotal|grand total|final amount|final cost|final price|final value|final worth|final budget|final expense|final revenue|final income|final salary|final wage|final bonus|final penalty|final fine|final refund|final deposit|final advance|final installment|final interest|final tax|final commission|final royalty|final rent|final lease|final purchase|final sale|final compensation|final benefits|final allowance|final stipend|final pension|final retirement|final insurance|final premium|final deductible|final coverage|final claim|final settlement|final award|final damages|final restitution|final reimbursement|final subsidy|final grant|final funding|final sponsorship|final endorsement|final licensing|final franchise|final dividend|final share|final stock|final bond|final security|final asset|final liability|final equity|final capital|final fund|final treasury|final budget|final forecast|final projection|final estimate|final quotation|final proposal|final bid|final tender|final contract|final agreement|final deal|final transaction|final exchange|final trade|final commerce|final business|final enterprise|final corporation|final company|final firm|final partnership|final sole proprietorship|final llc|final inc|final corp|final ltd|final llp|final pllc|final pc|final pa)\s+(?:is|equals?|=\s*)?\s*[\d,]+(?:\.\d{2})?', r'[CALCULATION: \g<0>]'),
+    ]
+    
+    enhanced_text = text
+    for pattern, replacement in financial_patterns:
+        enhanced_text = re.sub(pattern, replacement, enhanced_text, flags=re.IGNORECASE)
+    
+    return enhanced_text

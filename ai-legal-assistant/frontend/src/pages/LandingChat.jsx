@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Send, Bot, User, Loader2, Paperclip, AlertTriangle, Shield } from 'lucide-react';
-import api from '../api';
+import { Send, Bot, User, Loader2, Paperclip, Shield } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 import { freeAPI } from '../api/free';
 
 const LandingChat = () => {
@@ -12,7 +12,6 @@ const LandingChat = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [waitingSession, setWaitingSession] = useState(false);
-  const [riskAnalysis, setRiskAnalysis] = useState(null);
   const [isAnalyzingRisks, setIsAnalyzingRisks] = useState(false);
   const fileInputRef = useRef(null);
   const endRef = useRef(null);
@@ -53,23 +52,23 @@ const LandingChat = () => {
     setIsAnalyzingRisks(true);
     try {
       const res = await freeAPI.analyzeRisks(sessionId);
-      setRiskAnalysis(res.data);
-      setMessages((m) => [...m, { 
-        type: 'ai', 
-        content: `🔍 **Risk Analysis Complete**\n\n**Risk Level:** ${res.data.risk_level}\n\n**Analysis:**\n${res.data.risk_analysis}\n\n**Recommendations:**\n${res.data.recommendations.join('\n')}`, 
-        id: Date.now() 
+      setMessages((m) => [...m, {
+        type: 'ai',
+        content: `🔍 **Risk Analysis Complete**\n\n**Risk Level:** ${res.data.risk_level}\n\n**Analysis:**\n${res.data.risk_analysis}\n\n**Recommendations:**\n${res.data.recommendations.join('\n')}`,
+        id: Date.now()
       }]);
     } catch (e) {
       console.error('Risk analysis failed', e);
-      setMessages((m) => [...m, { 
-        type: 'ai', 
-        content: 'Error analyzing risks. Please try again.', 
-        id: Date.now() 
+      setMessages((m) => [...m, {
+        type: 'ai',
+        content: 'Error analyzing risks. Please try again.',
+        id: Date.now()
       }]);
     } finally {
       setIsAnalyzingRisks(false);
     }
   };
+
 
   const handleAsk = async (e) => {
     e.preventDefault();
@@ -262,17 +261,75 @@ const LandingChat = () => {
                   }}>
                     {m.type === 'user' ? <User size={18} color="#ffffff"/> : <Bot size={18} color="#ffffff"/>}                
                   </div>
-                  <div style={{
-                    flex:1,
-                    fontSize:'16px',
-                    lineHeight:'1.7',
-                    color:'#ffffff',
-                    whiteSpace:'pre-wrap',
-                    wordBreak:'break-word',
-                    fontWeight:'400'
-                  }}>
-                    {m.content}
-                  </div>
+                         <div style={{
+                           flex:1,
+                           fontSize:'16px',
+                           lineHeight:'1.7',
+                           color:'#ffffff',
+                           wordBreak:'break-word',
+                           fontWeight:'400'
+                         }}>
+                           <ReactMarkdown 
+                             components={{
+                               table: ({ children }) => (
+                                 <div style={{ overflowX: 'auto', margin: '10px 0' }}>
+                                   <table style={{ 
+                                     borderCollapse: 'collapse', 
+                                     width: '100%', 
+                                     backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                                     borderRadius: '8px',
+                                     overflow: 'hidden'
+                                   }}>
+                                     {children}
+                                   </table>
+                                 </div>
+                               ),
+                               th: ({ children }) => (
+                                 <th style={{ 
+                                   border: '1px solid rgba(255, 255, 255, 0.2)', 
+                                   padding: '12px', 
+                                   backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                                   textAlign: 'left',
+                                   fontWeight: '600'
+                                 }}>
+                                   {children}
+                                 </th>
+                               ),
+                               td: ({ children }) => (
+                                 <td style={{ 
+                                   border: '1px solid rgba(255, 255, 255, 0.2)', 
+                                   padding: '12px',
+                                   textAlign: 'left'
+                                 }}>
+                                   {children}
+                                 </td>
+                               ),
+                               code: ({ children }) => (
+                                 <code style={{ 
+                                   backgroundColor: 'rgba(255, 255, 255, 0.1)', 
+                                   padding: '2px 6px', 
+                                   borderRadius: '4px',
+                                   fontSize: '14px'
+                                 }}>
+                                   {children}
+                                 </code>
+                               ),
+                               pre: ({ children }) => (
+                                 <pre style={{ 
+                                   backgroundColor: 'rgba(255, 255, 255, 0.1)', 
+                                   padding: '12px', 
+                                   borderRadius: '8px',
+                                   overflowX: 'auto',
+                                   margin: '10px 0'
+                                 }}>
+                                   {children}
+                                 </pre>
+                               )
+                             }}
+                           >
+                             {m.content}
+                           </ReactMarkdown>
+                         </div>
                 </div>
               ))}
               {isLoading && (
@@ -353,34 +410,40 @@ const LandingChat = () => {
             </button>
             <input ref={fileInputRef} type="file" accept=".pdf,.doc,.docx" onChange={(e)=>handleUpload(e.target.files?.[0])} style={{display:'none'}}/>
             
-            {sessionId && (
-              <button 
-                type="button" 
-                onClick={handleAnalyzeRisks}
-                disabled={isAnalyzingRisks}
-                style={{
-                  background:'rgba(255, 193, 7, 0.2)',
-                  border:'1px solid rgba(255, 193, 7, 0.4)',
-                  color:'#ffc107',
-                  cursor: isAnalyzingRisks ? 'not-allowed' : 'pointer',
-                  padding:'8px',
-                  borderRadius:'8px',
-                  opacity: isAnalyzingRisks ? 0.5 : 1,
-                  transition:'all 0.2s ease',
-                  display:'flex',
-                  alignItems:'center',
-                  justifyContent:'center'
-                }}
-                title="Analyze risks in document"
-              >
-                {isAnalyzingRisks ? <Loader2 size={18} className="animate-spin"/> : <Shield size={18}/>}
-              </button>
-            )}
+                    {sessionId && (
+                      <button
+                        type="button"
+                        onClick={handleAnalyzeRisks}
+                        disabled={isAnalyzingRisks}
+                        style={{
+                          background:'rgba(255, 193, 7, 0.2)',
+                          border:'1px solid rgba(255, 193, 7, 0.4)',
+                          color:'#ffc107',
+                          cursor: isAnalyzingRisks ? 'not-allowed' : 'pointer',
+                          padding:'8px',
+                          borderRadius:'8px',
+                          opacity: isAnalyzingRisks ? 0.5 : 1,
+                          transition:'all 0.2s ease',
+                          display:'flex',
+                          alignItems:'center',
+                          justifyContent:'center'
+                        }}
+                        title="Analyze risks in document"
+                      >
+                        {isAnalyzingRisks ? <Loader2 size={18} className="animate-spin"/> : <Shield size={18}/>}
+                      </button>
+                    )}
               
               <input
                 type="text"
                 value={question}
                 onChange={(e)=>setQuestion(e.target.value)}
+                onKeyPress={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleAsk(e);
+                  }
+                }}
                 placeholder={waitingSession ? 'Processing your document…' : (sessionId ? 'Ask anything about your legal document...' : 'Attach a document to start asking questions')}
                 disabled={!sessionId || isLoading || waitingSession}
                 style={{

@@ -7,6 +7,7 @@ Documents and sessions are deleted when the session is closed.
 from fastapi import APIRouter, HTTPException, UploadFile, File, status
 from sqlalchemy.orm import Session
 from typing import Optional
+import re
 import hashlib
 from datetime import datetime
 import asyncio
@@ -142,6 +143,44 @@ async def free_ask(payload: dict, db: Session = Depends(get_db)):
         db.refresh(q)
 
         context = await find_relevant_context(question, document.id, db)
+        logger.info(f"Question: {question}")
+        logger.info(f"Context retrieved: {len(context)} characters")
+        logger.info(f"Context preview: {context[:200]}...")
+        
+        # Force context retrieval if none found
+        if not context.strip():
+            logger.warning("No context retrieved for question, trying fallback with all chunks")
+            # Fallback: get all chunks if no context found
+            all_chunks = db.query(DocumentChunk).filter(
+                DocumentChunk.document_id == document.id
+            ).order_by(DocumentChunk.chunk_index.asc()).all()
+            
+            if all_chunks:
+                context_parts = []
+                for ch in all_chunks:  # Get ALL chunks, not just first 10
+                    if ch.content:
+                        context_parts.append(f"[Chunk {ch.chunk_index}]: {ch.content}")
+                context = "\n\n".join(context_parts)
+                logger.info(f"Fallback context: {len(context)} characters from {len(all_chunks)} chunks")
+            else:
+                logger.error("No chunks found for document")
+                return {"answer": "I couldn't find any content in the document. Please make sure the document has been processed completely.", "confidence": 0.1, "model_used": "none", "timestamp": datetime.utcnow().isoformat()}
+        
+        # Additional fallback: if context is still very short, get more chunks
+        if len(context) < 500:
+            logger.warning(f"Context too short ({len(context)} chars), getting more chunks")
+            all_chunks = db.query(DocumentChunk).filter(
+                DocumentChunk.document_id == document.id
+            ).order_by(DocumentChunk.chunk_index.asc()).all()
+            
+            if all_chunks:
+                context_parts = []
+                for ch in all_chunks:
+                    if ch.content:
+                        context_parts.append(f"[Chunk {ch.chunk_index}]: {ch.content}")
+                context = "\n\n".join(context_parts)
+                logger.info(f"Extended context: {len(context)} characters from {len(all_chunks)} chunks")
+        
         result = await llm_service.answer_question(question, context)
 
         q.answer = result["answer"]
@@ -202,6 +241,36 @@ async def free_analyze_risks(payload: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Failed to analyze risks")
 
 
+@router.get("/debug/document/{document_id}")
+async def debug_document(document_id: int, db: Session = Depends(get_db)):
+    """Debug endpoint to check document processing"""
+    try:
+        owner = _get_or_create_free_user(db)
+        document = db.query(Document).filter(Document.id == document_id, Document.owner_id == owner.id).first()
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        chunks = db.query(DocumentChunk).filter(DocumentChunk.document_id == document_id).order_by(DocumentChunk.chunk_index.asc()).all()
+        
+        return {
+            "document_id": document_id,
+            "filename": document.filename,
+            "status": document.status,
+            "total_chunks": len(chunks),
+            "chunks_preview": [
+                {
+                    "index": chunk.chunk_index,
+                    "content_preview": chunk.content[:200] + "..." if len(chunk.content) > 200 else chunk.content,
+                    "has_amounts": bool(re.search(r'[\d,]+(?:\.\d{2})?/-', chunk.content) or re.search(r'\$[\d,]+', chunk.content))
+                }
+                for chunk in chunks[:5]  # First 5 chunks
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Debug error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.delete("/sessions/{session_id}")
 async def free_end_session(session_id: int, db: Session = Depends(get_db)):
     """Delete the session, related questions, and the underlying document + storage."""
@@ -235,42 +304,243 @@ async def free_end_session(session_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Failed to end session")
 
 
-# reuse from qa module
+# Enhanced context retrieval with financial information focus
 async def find_relevant_context(question: str, document_id: int, db: Session) -> str:
     try:
-        question_embedding = embedding_service.generate_embedding(question)
-        # Increased base_k for better retrieval
-        base_k = 15
-        chunk_ids, scores = embedding_service.search_similar(question_embedding, k=base_k, document_id=document_id, question_text=question)
-        candidate_indices = set()
-        for chunk_id in chunk_ids:
-            if chunk_id.startswith(f"doc_{document_id}_chunk_"):
-                idx = int(chunk_id.split("_")[-1])
-                # Include more surrounding chunks for better context
-                candidate_indices.update([idx - 2, idx - 1, idx, idx + 1, idx + 2])
-        if candidate_indices:
-            ordered_chunks = (
-                db.query(DocumentChunk)
-                .filter(DocumentChunk.document_id == document_id, DocumentChunk.chunk_index.in_(sorted([i for i in candidate_indices if i >= 0])))
-                .order_by(DocumentChunk.chunk_index.asc())
-                .all()
-            )
+        # Check if question is money-related
+        money_keywords = ['cost', 'price', 'amount', 'fee', 'payment', 'charge', 'total', 'sum', 'dollar', 'money', 'financial', 'budget', 'expense', 'revenue', 'income', 'salary', 'wage', 'bonus', 'penalty', 'fine', 'refund', 'deposit', 'advance', 'installment', 'interest', 'tax', 'commission', 'royalty', 'rent', 'lease', 'purchase', 'sale', 'value', 'worth', 'expensive', 'cheap', 'affordable', 'costly', 'free', 'paid', 'unpaid', 'due', 'overdue', 'billing', 'invoice', 'receipt', 'receivable', 'payable', 'debt', 'credit', 'loan', 'mortgage', 'investment', 'profit', 'loss', 'earnings', 'compensation', 'benefits', 'allowance', 'stipend', 'pension', 'retirement', 'insurance', 'premium', 'deductible', 'coverage', 'claim', 'settlement', 'award', 'damages', 'restitution', 'reimbursement', 'subsidy', 'grant', 'funding', 'sponsorship', 'endorsement', 'licensing', 'franchise', 'royalty', 'dividend', 'share', 'stock', 'bond', 'security', 'asset', 'liability', 'equity', 'capital', 'fund', 'treasury', 'budget', 'forecast', 'projection', 'estimate', 'quotation', 'proposal', 'bid', 'tender', 'contract', 'agreement', 'deal', 'transaction', 'exchange', 'trade', 'commerce', 'business', 'enterprise', 'corporation', 'company', 'firm', 'partnership', 'sole proprietorship', 'llc', 'inc', 'corp', 'ltd', 'llp', 'pllc', 'pc', 'pa', 'llc', 'inc', 'corp', 'ltd', 'llp', 'pllc', 'pc', 'pa']
+        
+        is_money_related = any(keyword in question.lower() for keyword in money_keywords)
+        
+        if is_money_related:
+            # For money-related questions, use aggressive amount detection
+            question_embedding = embedding_service.generate_embedding(question)
+            base_k = 25  # Further increased for financial queries
+            chunk_ids, scores = embedding_service.search_similar(question_embedding, k=base_k, document_id=document_id, question_text=question)
+            
+            # Get ALL chunks to ensure we don't miss amounts at the end
+            all_document_chunks = db.query(DocumentChunk).filter(
+                DocumentChunk.document_id == document_id
+            ).order_by(DocumentChunk.chunk_index.asc()).all()
+            
+            logger.info(f"Total chunks found for document {document_id}: {len(all_document_chunks)}")
+            if all_document_chunks:
+                logger.info(f"First chunk preview: {all_document_chunks[0].content[:200]}...")
+                logger.info(f"Last chunk preview: {all_document_chunks[-1].content[:200]}...")
+            
+            # Find chunks with specific amount patterns - simplified approach
+            amount_chunks = []
+            for chunk in all_document_chunks:
+                content = chunk.content
+                # Look for specific amount patterns - simplified
+                if (re.search(r'\$[\d,]+', content) or  # Dollar amounts
+                    re.search(r'[\d,]+(?:\.\d{2})?/-', content) or  # Indian currency format
+                    re.search(r'[\d,]+(?:\.\d{2})?\s*/-', content) or  # Indian currency with space
+                    re.search(r'[\d,]+(?:\.\d{2})?\s*(?:dollars?|usd|eur|gbp|rupees?)', content.lower()) or  # Currency amounts
+                    re.search(r'[\d,]+(?:\.\d{2})?\s*%', content) or  # Percentages
+                    re.search(r'(?:total|sum|amount|cost|price|fee|charge)\s*:?\s*[\d,]+', content.lower()) or  # Financial terms
+                    re.search(r'[\d,]+(?:\.\d{2})?\s*(?:total|sum|amount|cost|price|fee|charge)', content.lower())):  # Amounts with financial terms
+                    amount_chunks.append(chunk)
+                    logger.info(f"Found amount in chunk {chunk.chunk_index}: {content[:100]}...")
+            
+            # Also search for chunks containing financial terms
+            financial_chunks = db.query(DocumentChunk).filter(
+                DocumentChunk.document_id == document_id,
+                DocumentChunk.content.ilike('%$%') |  # Dollar signs
+                DocumentChunk.content.ilike('%USD%') |  # Currency codes
+                DocumentChunk.content.ilike('%EUR%') |
+                DocumentChunk.content.ilike('%GBP%') |
+                DocumentChunk.content.ilike('%CAD%') |
+                DocumentChunk.content.ilike('%AUD%') |
+                DocumentChunk.content.ilike('%payment%') |  # Payment terms
+                DocumentChunk.content.ilike('%fee%') |
+                DocumentChunk.content.ilike('%cost%') |
+                DocumentChunk.content.ilike('%charge%') |
+                DocumentChunk.content.ilike('%amount%') |
+                DocumentChunk.content.ilike('%total%') |
+                DocumentChunk.content.ilike('%price%') |
+                DocumentChunk.content.ilike('%financial%') |
+                DocumentChunk.content.ilike('%money%') |
+                DocumentChunk.content.ilike('%budget%') |
+                DocumentChunk.content.ilike('%expense%') |
+                DocumentChunk.content.ilike('%revenue%') |
+                DocumentChunk.content.ilike('%income%') |
+                DocumentChunk.content.ilike('%salary%') |
+                DocumentChunk.content.ilike('%wage%') |
+                DocumentChunk.content.ilike('%bonus%') |
+                DocumentChunk.content.ilike('%penalty%') |
+                DocumentChunk.content.ilike('%fine%') |
+                DocumentChunk.content.ilike('%refund%') |
+                DocumentChunk.content.ilike('%deposit%') |
+                DocumentChunk.content.ilike('%advance%') |
+                DocumentChunk.content.ilike('%installment%') |
+                DocumentChunk.content.ilike('%interest%') |
+                DocumentChunk.content.ilike('%tax%') |
+                DocumentChunk.content.ilike('%commission%') |
+                DocumentChunk.content.ilike('%royalty%') |
+                DocumentChunk.content.ilike('%rent%') |
+                DocumentChunk.content.ilike('%lease%') |
+                DocumentChunk.content.ilike('%purchase%') |
+                DocumentChunk.content.ilike('%sale%') |
+                DocumentChunk.content.ilike('%value%') |
+                DocumentChunk.content.ilike('%worth%') |
+                DocumentChunk.content.ilike('%expensive%') |
+                DocumentChunk.content.ilike('%cheap%') |
+                DocumentChunk.content.ilike('%affordable%') |
+                DocumentChunk.content.ilike('%costly%') |
+                DocumentChunk.content.ilike('%free%') |
+                DocumentChunk.content.ilike('%paid%') |
+                DocumentChunk.content.ilike('%unpaid%') |
+                DocumentChunk.content.ilike('%due%') |
+                DocumentChunk.content.ilike('%overdue%') |
+                DocumentChunk.content.ilike('%billing%') |
+                DocumentChunk.content.ilike('%invoice%') |
+                DocumentChunk.content.ilike('%receipt%') |
+                DocumentChunk.content.ilike('%receivable%') |
+                DocumentChunk.content.ilike('%payable%') |
+                DocumentChunk.content.ilike('%debt%') |
+                DocumentChunk.content.ilike('%credit%') |
+                DocumentChunk.content.ilike('%loan%') |
+                DocumentChunk.content.ilike('%mortgage%') |
+                DocumentChunk.content.ilike('%investment%') |
+                DocumentChunk.content.ilike('%profit%') |
+                DocumentChunk.content.ilike('%loss%') |
+                DocumentChunk.content.ilike('%earnings%') |
+                DocumentChunk.content.ilike('%compensation%') |
+                DocumentChunk.content.ilike('%benefits%') |
+                DocumentChunk.content.ilike('%allowance%') |
+                DocumentChunk.content.ilike('%stipend%') |
+                DocumentChunk.content.ilike('%pension%') |
+                DocumentChunk.content.ilike('%retirement%') |
+                DocumentChunk.content.ilike('%insurance%') |
+                DocumentChunk.content.ilike('%premium%') |
+                DocumentChunk.content.ilike('%deductible%') |
+                DocumentChunk.content.ilike('%coverage%') |
+                DocumentChunk.content.ilike('%claim%') |
+                DocumentChunk.content.ilike('%settlement%') |
+                DocumentChunk.content.ilike('%award%') |
+                DocumentChunk.content.ilike('%damages%') |
+                DocumentChunk.content.ilike('%restitution%') |
+                DocumentChunk.content.ilike('%reimbursement%') |
+                DocumentChunk.content.ilike('%subsidy%') |
+                DocumentChunk.content.ilike('%grant%') |
+                DocumentChunk.content.ilike('%funding%') |
+                DocumentChunk.content.ilike('%sponsorship%') |
+                DocumentChunk.content.ilike('%endorsement%') |
+                DocumentChunk.content.ilike('%licensing%') |
+                DocumentChunk.content.ilike('%franchise%') |
+                DocumentChunk.content.ilike('%royalty%') |
+                DocumentChunk.content.ilike('%dividend%') |
+                DocumentChunk.content.ilike('%share%') |
+                DocumentChunk.content.ilike('%stock%') |
+                DocumentChunk.content.ilike('%bond%') |
+                DocumentChunk.content.ilike('%security%') |
+                DocumentChunk.content.ilike('%asset%') |
+                DocumentChunk.content.ilike('%liability%') |
+                DocumentChunk.content.ilike('%equity%') |
+                DocumentChunk.content.ilike('%capital%') |
+                DocumentChunk.content.ilike('%fund%') |
+                DocumentChunk.content.ilike('%treasury%') |
+                DocumentChunk.content.ilike('%budget%') |
+                DocumentChunk.content.ilike('%forecast%') |
+                DocumentChunk.content.ilike('%projection%') |
+                DocumentChunk.content.ilike('%estimate%') |
+                DocumentChunk.content.ilike('%quotation%') |
+                DocumentChunk.content.ilike('%proposal%') |
+                DocumentChunk.content.ilike('%bid%') |
+                DocumentChunk.content.ilike('%tender%') |
+                DocumentChunk.content.ilike('%contract%') |
+                DocumentChunk.content.ilike('%agreement%') |
+                DocumentChunk.content.ilike('%deal%') |
+                DocumentChunk.content.ilike('%transaction%') |
+                DocumentChunk.content.ilike('%exchange%') |
+                DocumentChunk.content.ilike('%trade%') |
+                DocumentChunk.content.ilike('%commerce%') |
+                DocumentChunk.content.ilike('%business%') |
+                DocumentChunk.content.ilike('%enterprise%') |
+                DocumentChunk.content.ilike('%corporation%') |
+                DocumentChunk.content.ilike('%company%') |
+                DocumentChunk.content.ilike('%firm%') |
+                DocumentChunk.content.ilike('%partnership%') |
+                DocumentChunk.content.ilike('%sole proprietorship%') |
+                DocumentChunk.content.ilike('%llc%') |
+                DocumentChunk.content.ilike('%inc%') |
+                DocumentChunk.content.ilike('%corp%') |
+                DocumentChunk.content.ilike('%ltd%') |
+                DocumentChunk.content.ilike('%llp%') |
+                DocumentChunk.content.ilike('%pllc%') |
+                DocumentChunk.content.ilike('%pc%') |
+                DocumentChunk.content.ilike('%pa%')
+            ).all()
+            
+            # Combine all chunk sources
+            candidate_indices = set()
+            
+            # Add semantic search results
+            for chunk_id in chunk_ids:
+                if chunk_id.startswith(f"doc_{document_id}_chunk_"):
+                    idx = int(chunk_id.split("_")[-1])
+                    candidate_indices.update([idx - 3, idx - 2, idx - 1, idx, idx + 1, idx + 2, idx + 3])
+            
+            # Add amount chunks (highest priority)
+            logger.info(f"Found {len(amount_chunks)} chunks with amounts for document {document_id}")
+            for chunk in amount_chunks:
+                logger.info(f"Amount chunk {chunk.chunk_index}: {chunk.content[:100]}...")
+                candidate_indices.add(chunk.chunk_index)
+                # Include more surrounding context for amount chunks
+                candidate_indices.update([chunk.chunk_index - 2, chunk.chunk_index - 1, chunk.chunk_index + 1, chunk.chunk_index + 2])
+            
+            # Add financial chunks
+            for chunk in financial_chunks:
+                candidate_indices.add(chunk.chunk_index)
+                candidate_indices.update([chunk.chunk_index - 1, chunk.chunk_index + 1])
+            
+            # Get all chunks in order
+            all_chunks = db.query(DocumentChunk).filter(
+                DocumentChunk.document_id == document_id,
+                DocumentChunk.chunk_index.in_(sorted([i for i in candidate_indices if i >= 0]))
+            ).order_by(DocumentChunk.chunk_index.asc()).all()
+            
         else:
-            ordered_chunks = []
+            # Regular semantic search for non-financial questions
+            question_embedding = embedding_service.generate_embedding(question)
+            base_k = 15
+            chunk_ids, scores = embedding_service.search_similar(question_embedding, k=base_k, document_id=document_id, question_text=question)
+            candidate_indices = set()
+            for chunk_id in chunk_ids:
+                if chunk_id.startswith(f"doc_{document_id}_chunk_"):
+                    idx = int(chunk_id.split("_")[-1])
+                    candidate_indices.update([idx - 2, idx - 1, idx, idx + 1, idx + 2])
+            
+            all_chunks = db.query(DocumentChunk).filter(
+                DocumentChunk.document_id == document_id,
+                DocumentChunk.chunk_index.in_(sorted([i for i in candidate_indices if i >= 0]))
+            ).order_by(DocumentChunk.chunk_index.asc()).all()
+        
+        # Build context
         context_parts = []
         total_len = 0
-        # Increased context length for better answers
-        max_context_length = 5000
-        for ch in ordered_chunks:
+        max_context_length = 6000  # Increased for financial queries
+        
+        logger.info(f"Building context from {len(all_chunks)} chunks for document {document_id}")
+        
+        for ch in all_chunks:
             if not ch.content:
                 continue
             if total_len >= max_context_length:
+                logger.info(f"Context length limit reached at {total_len} characters")
                 break
             context_parts.append(f"[Chunk {ch.chunk_index}]: {ch.content}")
             total_len += len(ch.content)
+        
         context = "\n\n".join(context_parts)
+        logger.info(f"Final context length: {len(context)} characters")
+        logger.info(f"Context preview: {context[:500]}...")
+        
         return context
-    except Exception:
+        
+    except Exception as e:
+        logger.error(f"Error in find_relevant_context: {e}")
         return ""
 
 
