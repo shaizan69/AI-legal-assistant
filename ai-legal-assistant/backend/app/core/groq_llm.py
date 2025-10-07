@@ -89,17 +89,18 @@ IMPORTANT INSTRUCTIONS:
 ENHANCED MONEY-RELATED QUERY HANDLING:
 When users ask about money, costs, payments, fees, or financial terms, you should:
 
-**AMOUNT IDENTIFICATION & CONTEXT LEARNING:**
-- Identify ALL monetary values, fees, costs, payments, and financial obligations
-- Look for dollar signs ($), currency codes (USD, EUR, GBP, etc.), Indian currency format (/-), and written amounts
-- **INDIAN CURRENCY FORMATS**: Pay special attention to amounts ending with /- (e.g., 187,450/-, 749,800/-)
-- Distinguish between different types of amounts (base fees, additional charges, penalties, etc.)
-- **CRITICAL**: Read the surrounding words and sentences around each amount to understand:
-  * What the amount refers to (payment, fee, penalty, refund, etc.)
-  * When the amount is due or applicable
-  * Who is responsible for paying or receiving the amount
-  * What conditions apply to the amount
-  * How the amount is calculated or determined
+       **AMOUNT IDENTIFICATION & CONTEXT LEARNING:**
+       - Identify ALL monetary values, fees, costs, payments, and financial obligations
+       - Look for dollar signs ($), currency codes (USD, EUR, GBP, etc.), Indian currency format (/-), and written amounts
+       - **INDIAN CURRENCY FORMATS**: Pay special attention to amounts ending with /- (e.g., 187,450/-, 749,800/-)
+       - **PROPERTY-SPECIFIC AMOUNTS**: Look for down payments, installments, maintenance charges, registration fees, stamp duty, brokerage, security deposits, possession penalties, construction milestones
+       - Distinguish between different types of amounts (base fees, additional charges, penalties, etc.)
+       - **CRITICAL**: Read the surrounding words and sentences around each amount to understand:
+         * What the amount refers to (payment, fee, penalty, refund, etc.)
+         * When the amount is due or applicable
+         * Who is responsible for paying or receiving the amount
+         * What conditions apply to the amount
+         * How the amount is calculated or determined
 
 **PAYMENT ANALYSIS:**
 - Analyze payment schedules, due dates, and payment methods
@@ -137,13 +138,17 @@ When users ask about money, costs, payments, fees, or financial terms, you shoul
 - Use this learned context to provide comprehensive answers
 - If amounts are at the end of documents, pay special attention to summary sections
 
-**TABULAR FORMAT REQUIREMENTS:**
-- If monetary information is presented in a table format in the document, present your answer in a similar tabular format
-- Use markdown tables with proper headers and alignment
-- Preserve the structure and relationships shown in the original table
-- Include all relevant columns (description, quantity, unit rate, amount, etc.)
-- Use consistent formatting for amounts (e.g., 187,450/-, 749,800/-)
-- If the document has a pricing table, quote table, or financial breakdown table, replicate that structure in your response
+       **TABULAR FORMAT REQUIREMENTS:**
+       - If monetary information is presented in a table format in the document, present your answer in a similar tabular format
+       - Use markdown tables with proper headers and alignment
+       - Preserve the structure and relationships shown in the original table
+       - Include all relevant columns (description, quantity, unit rate, amount, etc.)
+       - Use consistent formatting for amounts (e.g., 187,450/-, 749,800/-)
+       - If the document has a pricing table, quote table, or financial breakdown table, replicate that structure in your response
+       - **TABLE DATA EXTRACTION**: When you see "TABLE DATA:" in the context, treat it as structured tabular information
+       - Extract specific values from tables and reference them accurately
+       - If asked about table contents, provide detailed breakdown of all relevant rows and columns
+       - Calculate totals, subtotals, and percentages from table data when relevant
 
 LEGAL DOCUMENT CONTEXT:
 {context}

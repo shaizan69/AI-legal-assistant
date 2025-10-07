@@ -20,6 +20,21 @@ const LandingChat = () => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Cleanup session when component unmounts
+  useEffect(() => {
+    return () => {
+      // Clean up session and document when user navigates away
+      if (sessionId) {
+        // Add a small delay to ensure any pending operations complete
+        setTimeout(() => {
+          freeAPI.endSession(sessionId).catch(error => {
+            console.warn('Failed to cleanup free session:', error);
+          });
+        }, 100);
+      }
+    };
+  }, [sessionId]);
+
   const handleUpload = async (file) => {
     if (!file) return;
     setIsUploading(true);
@@ -88,6 +103,34 @@ const LandingChat = () => {
     }
   };
 
+  const handleCleanup = async () => {
+    try {
+      await freeAPI.endSession(sessionId);
+      setSessionId(null);
+      setMessages([]);
+      alert('Session cleaned up successfully!');
+    } catch (error) {
+      console.error('Cleanup failed:', error);
+      alert('Cleanup failed. Please try again.');
+    }
+  };
+
+  const handleCleanupOrphaned = async () => {
+    try {
+      const response = await fetch('/api/free/cleanup-orphaned', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      const result = await response.json();
+      alert(result.message);
+    } catch (error) {
+      console.error('Orphaned cleanup failed:', error);
+      alert('Orphaned cleanup failed. Please try again.');
+    }
+  };
+
   // const endSession = async () => {
   //   try {
   //     if (sessionId) await api.delete(`/api/free/sessions/${sessionId}`);
@@ -145,6 +188,40 @@ const LandingChat = () => {
           </h1>
         </div>
         <div style={{display:'flex', gap:16}}>
+          {sessionId && (
+            <button 
+              onClick={handleCleanup}
+              style={{
+                background:'#ef4444',
+                color:'#ffffff',
+                border:'none',
+                padding:'8px 16px',
+                borderRadius:'8px',
+                fontSize:'14px',
+                fontWeight:'500',
+                cursor:'pointer',
+                transition:'all 0.2s ease'
+              }}
+            >
+              Clean Up
+            </button>
+          )}
+          <button 
+            onClick={handleCleanupOrphaned}
+            style={{
+              background:'#f59e0b',
+              color:'#ffffff',
+              border:'none',
+              padding:'8px 16px',
+              borderRadius:'8px',
+              fontSize:'14px',
+              fontWeight:'500',
+              cursor:'pointer',
+              transition:'all 0.2s ease'
+            }}
+          >
+            Clean Orphaned
+          </button>
           <Link to="/login" style={{
             color:'#ffffff', 
             textDecoration:'none', 

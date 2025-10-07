@@ -111,6 +111,13 @@ def chunk_text(text: str, chunk_size: int = 800, overlap: int = 160) -> List[str
     # Enhance text for better financial information capture
     enhanced_text = enhance_financial_chunking(text)
     
+    # Check if this is a property document with payment schedules
+    is_property_doc = is_property_document(enhanced_text)
+    
+    if is_property_doc:
+        # Use specialized chunking for property documents
+        return chunk_property_document(enhanced_text, chunk_size, overlap)
+    
     # First, try to split by legal document sections
     sections = split_by_legal_sections(enhanced_text)
     if len(sections) > 1:
@@ -133,6 +140,113 @@ def chunk_text(text: str, chunk_size: int = 800, overlap: int = 160) -> List[str
             chunks.append(chunk.strip())
     
     return chunks
+
+
+def is_property_document(text: str) -> bool:
+    """Check if document is property-related with payment schedules"""
+    property_indicators = [
+        'property', 'real estate', 'land', 'house', 'apartment', 'flat', 'villa',
+        'lease', 'rental', 'tenancy', 'agreement', 'deed', 'sale deed', 'purchase',
+        'payment schedule', 'installment', 'down payment', 'monthly payment',
+        'quarterly payment', 'annual payment', 'advance payment', 'security deposit',
+        'maintenance', 'maintenance charges', 'property tax', 'registration',
+        'stamp duty', 'brokerage', 'commission', 'possession', 'handover',
+        'possession date', 'completion', 'construction', 'builder', 'developer'
+    ]
+    
+    text_lower = text.lower()
+    property_count = sum(1 for indicator in property_indicators if indicator in text_lower)
+    
+    # Also check for payment schedule patterns
+    payment_patterns = [
+        r'payment\s+schedule', r'installment\s+plan', r'payment\s+plan',
+        r'monthly\s+installment', r'quarterly\s+installment', r'annual\s+installment',
+        r'down\s+payment', r'advance\s+payment', r'security\s+deposit'
+    ]
+    
+    payment_count = sum(1 for pattern in payment_patterns if re.search(pattern, text_lower))
+    
+    return property_count >= 3 or payment_count >= 2
+
+
+def chunk_property_document(text: str, chunk_size: int, overlap: int) -> List[str]:
+    """Specialized chunking for property documents with payment schedules"""
+    chunks = []
+    
+    # First, try to extract payment schedules as separate chunks
+    payment_schedules = extract_payment_schedules(text)
+    if payment_schedules:
+        for schedule in payment_schedules:
+            chunks.append(schedule)
+    
+    # Extract property-specific sections
+    property_sections = extract_property_sections(text)
+    for section in property_sections:
+        if len(section.split()) <= chunk_size:
+            chunks.append(section.strip())
+        else:
+            # Split large sections by sentences
+            chunks.extend(split_by_sentences(section, chunk_size, overlap))
+    
+    # If no specific sections found, use enhanced word-based chunking
+    if not chunks:
+        words = text.split()
+        for i in range(0, len(words), chunk_size - overlap):
+            chunk = ' '.join(words[i:i + chunk_size])
+            if chunk.strip():
+                chunks.append(chunk.strip())
+    
+    return chunks
+
+
+def extract_payment_schedules(text: str) -> List[str]:
+    """Extract payment schedules from property documents"""
+    import re
+    
+    schedules = []
+    
+    # Look for payment schedule patterns
+    schedule_patterns = [
+        r'(?:payment\s+schedule|installment\s+plan|payment\s+plan)[\s\S]*?(?=\n\s*\n|\n\s*[A-Z]|\Z)',
+        r'(?:monthly|quarterly|annual)\s+installment[\s\S]*?(?=\n\s*\n|\n\s*[A-Z]|\Z)',
+        r'(?:down\s+payment|advance\s+payment)[\s\S]*?(?=\n\s*\n|\n\s*[A-Z]|\Z)',
+        r'(?:possession|handover|completion)[\s\S]*?(?=\n\s*\n|\n\s*[A-Z]|\Z)'
+    ]
+    
+    for pattern in schedule_patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE | re.MULTILINE)
+        for match in matches:
+            if len(match.strip()) > 50:  # Only include substantial content
+                schedules.append(f"PAYMENT SCHEDULE:\n{match.strip()}")
+    
+    return schedules
+
+
+def extract_property_sections(text: str) -> List[str]:
+    """Extract property-specific sections from documents"""
+    import re
+    
+    sections = []
+    
+    # Property-specific section patterns
+    property_patterns = [
+        r'(?:property\s+details|property\s+information)[\s\S]*?(?=\n\s*\n|\n\s*[A-Z]|\Z)',
+        r'(?:payment\s+terms|payment\s+conditions)[\s\S]*?(?=\n\s*\n|\n\s*[A-Z]|\Z)',
+        r'(?:possession\s+terms|possession\s+conditions)[\s\S]*?(?=\n\s*\n|\n\s*[A-Z]|\Z)',
+        r'(?:maintenance\s+charges|maintenance\s+fees)[\s\S]*?(?=\n\s*\n|\n\s*[A-Z]|\Z)',
+        r'(?:registration\s+charges|stamp\s+duty)[\s\S]*?(?=\n\s*\n|\n\s*[A-Z]|\Z)',
+        r'(?:brokerage|commission)[\s\S]*?(?=\n\s*\n|\n\s*[A-Z]|\Z)',
+        r'(?:penalty|late\s+fee)[\s\S]*?(?=\n\s*\n|\n\s*[A-Z]|\Z)',
+        r'(?:refund\s+policy|cancellation)[\s\S]*?(?=\n\s*\n|\n\s*[A-Z]|\Z)'
+    ]
+    
+    for pattern in property_patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE | re.MULTILINE)
+        for match in matches:
+            if len(match.strip()) > 50:  # Only include substantial content
+                sections.append(match.strip())
+    
+    return sections
 
 
 def split_by_legal_sections(text: str) -> List[str]:
@@ -394,8 +508,156 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     return encoded_jwt
 
 
+def extract_tables_from_text(text: str) -> List[Dict[str, Any]]:
+    """Extract table data from text using various patterns"""
+    tables = []
+    lines = text.split('\n')
+    
+    current_table = None
+    table_start = None
+    
+    for i, line in enumerate(lines):
+        line = line.strip()
+        if not line:
+            continue
+            
+        # Check if line looks like a table header (contains multiple columns separated by spaces/tabs)
+        if is_table_header(line):
+            if current_table:
+                # Save previous table
+                tables.append(current_table)
+            
+            # Start new table
+            current_table = {
+                "start_line": i,
+                "headers": parse_table_row(line),
+                "rows": [],
+                "type": "financial" if contains_financial_data(line) else "general"
+            }
+            table_start = i
+            
+        # Check if line looks like a table row
+        elif current_table and is_table_row(line):
+            row_data = parse_table_row(line)
+            if len(row_data) >= len(current_table["headers"]):
+                current_table["rows"].append({
+                    "line_number": i,
+                    "data": row_data
+                })
+        
+        # Check if we've reached the end of a table (empty line or non-table content)
+        elif current_table and (not line or not is_table_row(line)):
+            if current_table["rows"]:  # Only save if we have data
+                current_table["end_line"] = i - 1
+                tables.append(current_table)
+            current_table = None
+            table_start = None
+    
+    # Don't forget the last table
+    if current_table and current_table["rows"]:
+        current_table["end_line"] = len(lines) - 1
+        tables.append(current_table)
+    
+    return tables
+
+
+def is_table_header(line: str) -> bool:
+    """Check if a line looks like a table header"""
+    # Look for patterns like: "Item | Quantity | Price" or "Sr. No.  Description  Amount"
+    if len(line) < 10:
+        return False
+    
+    # Check for multiple columns separated by spaces/tabs/pipes
+    columns = re.split(r'\s{2,}|\t+|\|', line)
+    if len(columns) < 2:
+        return False
+    
+    # Check if it contains table-like words
+    table_indicators = [
+        'item', 'description', 'quantity', 'qty', 'amount', 'price', 'cost', 'total',
+        'sr', 'no', 's.no', 'sno', 'sl', 'serial', 'particulars', 'details',
+        'unit', 'rate', 'value', 'sum', 'subtotal', 'tax', 'gst', 'vat',
+        'payment', 'fee', 'charge', 'penalty', 'interest', 'discount'
+    ]
+    
+    line_lower = line.lower()
+    indicator_count = sum(1 for indicator in table_indicators if indicator in line_lower)
+    
+    return indicator_count >= 1 and len(columns) >= 2
+
+
+def is_table_row(line: str) -> bool:
+    """Check if a line looks like a table row"""
+    if len(line) < 5:
+        return False
+    
+    # Check for multiple columns separated by spaces/tabs
+    columns = re.split(r'\s{2,}|\t+', line)
+    if len(columns) < 2:
+        return False
+    
+    # Check if it contains data patterns (numbers, amounts, etc.)
+    data_patterns = [
+        r'\d+',  # Numbers
+        r'[\d,]+(?:\.\d{2})?',  # Amounts
+        r'[\d,]+(?:\.\d{2})?/-',  # Indian currency
+        r'\$[\d,]+(?:\.\d{2})?',  # Dollar amounts
+        r'[\d,]+(?:\.\d{2})?\s*%',  # Percentages
+    ]
+    
+    has_data = any(re.search(pattern, line) for pattern in data_patterns)
+    return has_data or len(columns) >= 3
+
+
+def parse_table_row(line: str) -> List[str]:
+    """Parse a table row into columns"""
+    # Split by multiple spaces, tabs, or pipes
+    columns = re.split(r'\s{2,}|\t+|\|', line)
+    return [col.strip() for col in columns if col.strip()]
+
+
+def contains_financial_data(line: str) -> bool:
+    """Check if a line contains financial data"""
+    financial_patterns = [
+        r'[\d,]+(?:\.\d{2})?/-',  # Indian currency
+        r'\$[\d,]+(?:\.\d{2})?',  # Dollar amounts
+        r'[\d,]+(?:\.\d{2})?\s*(?:USD|EUR|GBP|INR|rupees?)',  # Currency codes
+        r'[\d,]+(?:\.\d{2})?\s*%',  # Percentages
+        r'(?:amount|price|cost|fee|charge|total|sum|value)',  # Financial terms
+    ]
+    
+    return any(re.search(pattern, line, re.IGNORECASE) for pattern in financial_patterns)
+
+
+def format_table_for_chunking(table: Dict[str, Any]) -> str:
+    """Format table data for better chunking and retrieval"""
+    if not table or not table.get("rows"):
+        return ""
+    
+    formatted_lines = []
+    
+    # Add table header
+    headers = table["headers"]
+    formatted_lines.append("TABLE DATA:")
+    formatted_lines.append("| " + " | ".join(headers) + " |")
+    formatted_lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
+    
+    # Add table rows
+    for row in table["rows"]:
+        row_data = row["data"]
+        # Pad row data to match header length
+        while len(row_data) < len(headers):
+            row_data.append("")
+        formatted_lines.append("| " + " | ".join(row_data) + " |")
+    
+    return "\n".join(formatted_lines)
+
+
 def enhance_financial_chunking(text: str) -> str:
     """Enhance text to better capture financial information for chunking"""
+    # First, extract and format tables
+    tables = extract_tables_from_text(text)
+    
     # Add markers around financial terms to improve chunking and retrieval
     financial_patterns = [
         # Dollar amounts and currency
@@ -426,6 +688,14 @@ def enhance_financial_chunking(text: str) -> str:
         (r'[\d,]+(?:\.\d{2})?\s*%', r'[PERCENTAGE: \g<0>]'),
         (r'(?:interest|rate|commission|fee)\s*of\s*[\d,]+(?:\.\d{2})?\s*%', r'[PERCENTAGE: \g<0>]'),
         
+        # Property-specific financial terms
+        (r'(?:down payment|advance payment|security deposit|maintenance|maintenance charges|property tax|registration|stamp duty|brokerage|commission|possession|handover|completion|construction|builder|developer)\s*:?\s*[\d,]+(?:\.\d{2})?', r'[PROPERTY_FINANCIAL: \g<0>]'),
+        (r'(?:down payment|advance payment|security deposit|maintenance|maintenance charges|property tax|registration|stamp duty|brokerage|commission|possession|handover|completion|construction|builder|developer)\s*of\s*[\d,]+(?:\.\d{2})?', r'[PROPERTY_FINANCIAL: \g<0>]'),
+        
+        # Payment schedule terms
+        (r'(?:monthly|quarterly|annual|installment|payment schedule|payment plan)\s*:?\s*[\d,]+(?:\.\d{2})?', r'[PAYMENT_SCHEDULE: \g<0>]'),
+        (r'(?:monthly|quarterly|annual|installment|payment schedule|payment plan)\s*of\s*[\d,]+(?:\.\d{2})?', r'[PAYMENT_SCHEDULE: \g<0>]'),
+        
         # Financial sections and clauses
         (r'(?:payment|financial|cost|fee|charge|amount|total|sum|price|value|worth|budget|expense|revenue|income|salary|wage|bonus|penalty|fine|refund|deposit|advance|installment|interest|tax|commission|royalty|rent|lease|purchase|sale|compensation|benefits|allowance|stipend|pension|retirement|insurance|premium|deductible|coverage|claim|settlement|award|damages|restitution|reimbursement|subsidy|grant|funding|sponsorship|endorsement|licensing|franchise|dividend|share|stock|bond|security|asset|liability|equity|capital|fund|treasury|budget|forecast|projection|estimate|quotation|proposal|bid|tender|contract|agreement|deal|transaction|exchange|trade|commerce|business|enterprise|corporation|company|firm|partnership|sole proprietorship|llc|inc|corp|ltd|llp|pllc|pc|pa)\s+(?:terms?|conditions?|clauses?|provisions?|sections?|articles?|paragraphs?)', r'[FINANCIAL_SECTION: \g<0>]'),
         
@@ -439,5 +709,14 @@ def enhance_financial_chunking(text: str) -> str:
     enhanced_text = text
     for pattern, replacement in financial_patterns:
         enhanced_text = re.sub(pattern, replacement, enhanced_text, flags=re.IGNORECASE)
+    
+    # Add formatted tables to the enhanced text
+    if tables:
+        table_section = "\n\n" + "="*50 + "\nEXTRACTED TABLES:\n" + "="*50 + "\n"
+        for i, table in enumerate(tables):
+            table_section += f"\nTABLE {i+1}:\n"
+            table_section += format_table_for_chunking(table) + "\n"
+        
+        enhanced_text += table_section
     
     return enhanced_text

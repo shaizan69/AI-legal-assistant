@@ -50,6 +50,21 @@ const QASession = () => {
     })();
   }, [sessionId]);
 
+  // Cleanup session when component unmounts
+  useEffect(() => {
+    return () => {
+      // Clean up session and document when user navigates away
+      if (sessionId) {
+        // Add a small delay to ensure any pending operations complete
+        setTimeout(() => {
+          qaAPI.cleanupSession(Number(sessionId)).catch(error => {
+            console.warn('Failed to cleanup session:', error);
+          });
+        }, 100);
+      }
+    };
+  }, [sessionId]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!question.trim() || isLoading) return;
@@ -138,6 +153,16 @@ const QASession = () => {
     }
   };
 
+  const handleCleanup = async () => {
+    try {
+      await qaAPI.cleanupSession(Number(sessionId));
+      alert('Session cleaned up successfully!');
+    } catch (error) {
+      console.error('Cleanup failed:', error);
+      alert('Cleanup failed. Please try again.');
+    }
+  };
+
   const copyToClipboard = async (content, messageId) => {
     try {
       await navigator.clipboard.writeText(content);
@@ -160,6 +185,15 @@ const QASession = () => {
           <div className="chat-title-section">
             <h1 className="chat-title">Document Q&A</h1>
             <p className="chat-subtitle">Ask questions about your document</p>
+          </div>
+          <div className="chat-actions">
+            <button 
+              className="cleanup-button"
+              onClick={handleCleanup}
+              title="Clean up session and document"
+            >
+              Clean Up
+            </button>
           </div>
         </div>
       </div>

@@ -308,7 +308,7 @@ async def delete_qa_session(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """Delete a Q&A session"""
+    """Delete a Q&A session and associated document with chunks"""
     try:
         session = db.query(QASession).filter(
             QASession.id == session_id,
@@ -321,11 +321,53 @@ async def delete_qa_session(
                 detail="Q&A session not found"
             )
         
+        # Get document before deleting session
+        document_id = session.document_id
+        document = db.query(Document).filter(
+            Document.id == document_id,
+            Document.owner_id == current_user.id
+        ).first()
+        
+        logger.info(f"Starting cleanup for session {session_id}, document {document_id}")
+        
+        # Delete QA questions first (due to foreign key constraints)
+        questions_deleted = db.query(QAQuestion).filter(QAQuestion.session_id == session.id).delete()
+        logger.info(f"Deleted {questions_deleted} QA questions")
+        
+        # Delete the session
         db.delete(session)
+        logger.info(f"Deleted session {session_id}")
+        
+        # Delete document chunks
+        chunks_deleted = db.query(DocumentChunk).filter(DocumentChunk.document_id == document_id).delete()
+        logger.info(f"Deleted {chunks_deleted} document chunks")
+        
+        # Delete document analysis if exists
+        from app.models.analysis import RiskAnalysis
+        analysis_deleted = db.query(RiskAnalysis).filter(RiskAnalysis.document_id == document_id).delete()
+        logger.info(f"Deleted {analysis_deleted} risk analyses")
+        
+        # Delete the document
+        if document:
+            logger.info(f"Deleting document {document_id}: {document.original_filename}")
+            # Delete from Supabase storage if path exists
+            if document.supabase_path:
+                try:
+                    from app.services.supabase_service import supabase_service
+                    await supabase_service.delete_file(document.supabase_path)
+                    logger.info(f"Deleted file from Supabase: {document.supabase_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete file from Supabase: {e}")
+            
+            db.delete(document)
+            logger.info(f"Deleted document {document_id} from database")
+        else:
+            logger.warning(f"Document {document_id} not found for user {current_user.id}")
+        
         db.commit()
         
-        logger.info(f"Q&A session deleted: {session_id}")
-        return {"message": "Q&A session deleted successfully"}
+        logger.info(f"Q&A session, document, and chunks deleted: {session_id}")
+        return {"message": "Q&A session and document deleted successfully"}
         
     except HTTPException:
         raise
@@ -335,6 +377,84 @@ async def delete_qa_session(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error deleting Q&A session"
+        )
+
+
+@router.post("/sessions/{session_id}/cleanup")
+async def cleanup_session(
+    session_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Clean up session and associated document when user navigates away"""
+    try:
+        session = db.query(QASession).filter(
+            QASession.id == session_id,
+            QASession.user_id == current_user.id
+        ).first()
+        
+        if not session:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Q&A session not found"
+            )
+        
+        # Get document before deleting session
+        document_id = session.document_id
+        document = db.query(Document).filter(
+            Document.id == document_id,
+            Document.owner_id == current_user.id
+        ).first()
+        
+        logger.info(f"Starting cleanup for session {session_id}, document {document_id}")
+        
+        # Delete QA questions first (due to foreign key constraints)
+        questions_deleted = db.query(QAQuestion).filter(QAQuestion.session_id == session.id).delete()
+        logger.info(f"Deleted {questions_deleted} QA questions")
+        
+        # Delete the session
+        db.delete(session)
+        logger.info(f"Deleted session {session_id}")
+        
+        # Delete document chunks
+        chunks_deleted = db.query(DocumentChunk).filter(DocumentChunk.document_id == document_id).delete()
+        logger.info(f"Deleted {chunks_deleted} document chunks")
+        
+        # Delete document analysis if exists
+        from app.models.analysis import RiskAnalysis
+        analysis_deleted = db.query(RiskAnalysis).filter(RiskAnalysis.document_id == document_id).delete()
+        logger.info(f"Deleted {analysis_deleted} risk analyses")
+        
+        # Delete the document
+        if document:
+            logger.info(f"Deleting document {document_id}: {document.original_filename}")
+            # Delete from Supabase storage if path exists
+            if document.supabase_path:
+                try:
+                    from app.services.supabase_service import supabase_service
+                    await supabase_service.delete_file(document.supabase_path)
+                    logger.info(f"Deleted file from Supabase: {document.supabase_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete file from Supabase: {e}")
+            
+            db.delete(document)
+            logger.info(f"Deleted document {document_id} from database")
+        else:
+            logger.warning(f"Document {document_id} not found for user {current_user.id}")
+        
+        db.commit()
+        
+        logger.info(f"Session cleanup completed: {session_id}")
+        return {"message": "Session cleaned up successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error cleaning up session: {e}")
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error cleaning up session"
         )
 
 

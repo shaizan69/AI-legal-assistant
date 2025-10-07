@@ -66,12 +66,32 @@ async def free_upload(file: UploadFile = File(...), db: Session = Depends(get_db
 
         file_url = await supabase_service.get_file_url(supa_path)
 
-        # If a document with the same hash exists for the free user, reuse it
+        # Check if document with same hash exists and delete it first
         existing = db.query(Document).filter(Document.file_hash == file_hash, Document.owner_id == owner.id).first()
         if existing:
-            logger.info("Reusing existing free-user document for identical content")
-            return {"id": existing.id}
+            logger.info(f"Found existing document with same hash, deleting it first: {existing.id}")
+            # Delete existing document and all related data
+            db.query(QAQuestion).filter(QAQuestion.session_id.in_(
+                db.query(QASession.id).filter(QASession.document_id == existing.id)
+            )).delete()
+            db.query(QASession).filter(QASession.document_id == existing.id).delete()
+            db.query(DocumentChunk).filter(DocumentChunk.document_id == existing.id).delete()
+            from app.models.analysis import RiskAnalysis
+            db.query(RiskAnalysis).filter(RiskAnalysis.document_id == existing.id).delete()
+            
+            # Delete from Supabase storage
+            if existing.supabase_path:
+                try:
+                    await supabase_service.delete_file(existing.supabase_path)
+                    logger.info(f"Deleted existing file from Supabase: {existing.supabase_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete existing file from Supabase: {e}")
+            
+            db.delete(existing)
+            db.commit()
+            logger.info(f"Deleted existing document {existing.id}")
 
+        # Create new document
         doc = Document(
             filename=unique_name,
             original_filename=file.filename,
@@ -302,6 +322,54 @@ async def free_end_session(session_id: int, db: Session = Depends(get_db)):
         logger.error(f"free_end_session error: {e}")
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to end session")
+
+
+@router.post("/cleanup-orphaned")
+async def cleanup_orphaned_documents(db: Session = Depends(get_db)):
+    """Clean up any orphaned documents for free users"""
+    try:
+        owner = _get_or_create_free_user(db)
+        
+        # Find documents without active sessions
+        orphaned_docs = db.query(Document).filter(
+            Document.owner_id == owner.id,
+            ~Document.id.in_(
+                db.query(QASession.document_id).filter(QASession.user_id == owner.id)
+            )
+        ).all()
+        
+        cleaned_count = 0
+        for doc in orphaned_docs:
+            logger.info(f"Cleaning up orphaned document: {doc.id} - {doc.original_filename}")
+            
+            # Delete all related data
+            db.query(QAQuestion).filter(QAQuestion.session_id.in_(
+                db.query(QASession.id).filter(QASession.document_id == doc.id)
+            )).delete()
+            db.query(QASession).filter(QASession.document_id == doc.id).delete()
+            db.query(DocumentChunk).filter(DocumentChunk.document_id == doc.id).delete()
+            from app.models.analysis import RiskAnalysis
+            db.query(RiskAnalysis).filter(RiskAnalysis.document_id == doc.id).delete()
+            
+            # Delete from Supabase storage
+            if doc.supabase_path:
+                try:
+                    await supabase_service.delete_file(doc.supabase_path)
+                    logger.info(f"Deleted orphaned file from Supabase: {doc.supabase_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete orphaned file from Supabase: {e}")
+            
+            db.delete(doc)
+            cleaned_count += 1
+        
+        db.commit()
+        logger.info(f"Cleaned up {cleaned_count} orphaned documents")
+        return {"message": f"Cleaned up {cleaned_count} orphaned documents"}
+        
+    except Exception as e:
+        logger.error(f"cleanup_orphaned_documents error: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to cleanup orphaned documents")
 
 
 # Enhanced context retrieval with financial information focus

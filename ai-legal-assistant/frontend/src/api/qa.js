@@ -24,6 +24,11 @@ export const qaAPI = {
     return response.data;
   },
 
+  cleanupSession: async (sessionId) => {
+    const response = await api.post(`/api/qa/sessions/${sessionId}/cleanup`);
+    return response.data;
+  },
+
   askQuestion: async (question, sessionId) => {
     const response = await api.post('/api/qa/ask', {
       question,

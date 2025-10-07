@@ -20,6 +20,9 @@ from docx import Document as DocxDocument
 import pytesseract
 from PIL import Image
 
+# Table extraction
+from app.core.utils import enhance_financial_chunking
+
 logger = logging.getLogger(__name__)
 
 
@@ -51,9 +54,11 @@ class DocumentProcessor:
                 file_path
             )
             
-            if text:
-                logger.info(f"Successfully extracted text from {file_path}")
-                return text
+            if text and len(text.strip()) > 10:
+                # Enhance text with table extraction and financial chunking
+                enhanced_text = enhance_financial_chunking(text)
+                logger.info(f"Enhanced text with table extraction and financial chunking")
+                return enhanced_text
             else:
                 logger.warning(f"No text extracted from {file_path}")
                 return None
