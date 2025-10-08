@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Fine-tuning script for Indian Legal Document Assistant
-Based on OpenAI GPT-OSS-120B model specifications
+Base model configurable via --model_name or constant
 """
 
 import json
@@ -30,7 +30,7 @@ class IndianLegalFineTuner:
         Initialize the fine-tuner
         
         Args:
-            model_name: Base model to fine-tune (replace with actual GPT-OSS-120B)
+            model_name: Base model to fine-tune
             max_length: Maximum sequence length
         """
         self.model_name = model_name
@@ -321,7 +321,7 @@ RESPONSE:"""
 
 if __name__ == "__main__":
     # Configuration
-    MODEL_NAME = "microsoft/DialoGPT-medium"  # Replace with actual GPT-OSS-120B
+    MODEL_NAME = "microsoft/DialoGPT-medium"
     DATA_PATH = "training_data.jsonl"
     OUTPUT_DIR = f"fine_tuned_legal_assistant_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     NUM_EPOCHS = 3

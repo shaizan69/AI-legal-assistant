@@ -6,6 +6,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List, Optional
 import os
 from pathlib import Path
+from dotenv import dotenv_values  # type: ignore
+import re
 
 
 class Settings(BaseSettings):
@@ -36,7 +38,8 @@ class Settings(BaseSettings):
     
     # Groq API Configuration (Primary LLM)
     GROQ_API_KEY: str = ""
-    GROQ_MODEL: str = ""
+    # Default to groq/compound if not provided in env
+    GROQ_MODEL: str = "groq/compound"
     GROQ_BASE_URL: str = ""
     
     # Legacy fields (unused)
@@ -84,6 +87,44 @@ class Settings(BaseSettings):
         
         # Set Hugging Face cache environment variables
         self._configure_huggingface_cache()
+        
+        # Remove OS env override for GROQ_MODEL so only .env file is authoritative
+        try:
+            if os.environ.get('GROQ_MODEL'):
+                os.environ.pop('GROQ_MODEL', None)
+        except Exception:
+            pass
+
+        # Force-read GROQ_MODEL from the main project .env to avoid OS env overrides
+        main_env_path = "D:/Legal assistant/ai-legal-assistant/.env"
+        file_model: Optional[str] = None
+        # Try dotenv first
+        try:
+            main_env = dotenv_values(main_env_path)
+            file_model = (main_env.get("GROQ_MODEL") or "").strip() if main_env else None
+        except Exception:
+            file_model = None
+        # Fallback: manual parse
+        if not file_model:
+            try:
+                with open(main_env_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        m = re.match(r"\s*GROQ_MODEL\s*=\s*(.+)\s*$", line)
+                        if m:
+                            file_model = m.group(1).strip().strip('"').strip("'")
+                            break
+            except Exception:
+                file_model = None
+        if file_model:
+            self.GROQ_MODEL = file_model
+        # Log model selection for visibility
+        try:
+            print(f"[config] GROQ_MODEL loaded: {self.GROQ_MODEL}")
+            print(f"[config] GROQ_API_KEY loaded: {self.GROQ_API_KEY[:10]}...")
+            print(f"[config] Loading from env file: D:/Legal assistant/ai-legal-assistant/.env")
+            print(f"[config] OS env GROQ_MODEL (cleared): {os.environ.get('GROQ_MODEL')}")
+        except Exception as e:
+            print(f"[config] Error logging model info: {e}")
     
     def _configure_huggingface_cache(self):
         """Configure Hugging Face cache directories to use D:\Hugging Face"""

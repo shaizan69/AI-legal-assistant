@@ -6,7 +6,7 @@ Documents and sessions are deleted when the session is closed.
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, status
 from sqlalchemy.orm import Session
-from typing import Optional
+from typing import Optional, List
 import re
 import hashlib
 from datetime import datetime
@@ -40,6 +40,58 @@ def _get_or_create_free_user(db: Session) -> User:
     db.refresh(user)
     return user
 
+
+def _extract_payment_schedule_table(chunks_text: List[str]) -> str:
+    """Build a normalized payment schedule table from chunk texts with FINANCIAL markers.
+
+    Expected lines like:
+      "On Booking Rs.[[FINANCIAL: AMOUNT: 1020000] /-]"
+    Returns a markdown table with Sr., Stage, Amount.
+    """
+    combined = "\n".join(chunks_text)
+    lines = [ln.strip() for ln in combined.splitlines() if 'FINANCIAL: AMOUNT' in ln]
+    if not lines:
+        return ""
+
+    rows: List[tuple[str, str]] = []
+    total_amount = 0
+
+    for ln in lines:
+        # Extract numeric amount
+        m_amt = re.search(r"FINANCIAL:\s*AMOUNT:\s*([\d,]+)", ln)
+        amount_raw = m_amt.group(1) if m_amt else ""
+        amount_num = 0
+        try:
+            amount_num = int(amount_raw.replace(',', '')) if amount_raw else 0
+        except Exception:
+            amount_num = 0
+
+        # Derive stage text by removing the Rs/marker sequence
+        stage_text = re.sub(r"Rs\.\s*\[\[.*?\]\]\s*/-\]?", "", ln, flags=re.IGNORECASE)
+        stage_text = re.sub(r"\s{2,}", " ", stage_text).strip(':- ').strip()
+        # Keep it concise
+        stage_text = stage_text[:120]
+
+        if amount_num > 0:
+            total_amount += amount_num
+        rows.append((stage_text, amount_raw))
+
+    if not rows:
+        return ""
+
+    # Build markdown table
+    table_lines = [
+        "| Sr. | Stage | Amount (INR) |",
+        "| --- | ------ | ------------- |",
+    ]
+    for idx, (stage, amount) in enumerate(rows, 1):
+        display_amt = f"{amount}/-" if amount else ""
+        table_lines.append(f"| {idx} | {stage} | {display_amt} |")
+
+    if total_amount > 0:
+        table_lines.append(f"|  | Total (computed) | {total_amount:,}/- |")
+
+    return "\n".join(table_lines)
 
 @router.post("/upload")
 async def free_upload(file: UploadFile = File(...), db: Session = Depends(get_db)):
@@ -381,6 +433,13 @@ async def find_relevant_context(question: str, document_id: int, db: Session) ->
         is_money_related = any(keyword in question.lower() for keyword in money_keywords)
         
         if is_money_related:
+            # Detect payment schedule intent
+            schedule_keywords = [
+                'payment schedule', 'installment', 'instalment', 'milestone', 'stage of work',
+                'schedule of payment', 'plan of payment', 'payment plan', 'due on', 'on possession',
+                'on booking', 'on agreement', 'slab'
+            ]
+            is_schedule_query = any(k in question.lower() for k in schedule_keywords)
             # For money-related questions, use aggressive amount detection
             question_embedding = embedding_service.generate_embedding(question)
             base_k = 25  # Further increased for financial queries
@@ -395,6 +454,16 @@ async def find_relevant_context(question: str, document_id: int, db: Session) ->
             if all_document_chunks:
                 logger.info(f"First chunk preview: {all_document_chunks[0].content[:200]}...")
                 logger.info(f"Last chunk preview: {all_document_chunks[-1].content[:200]}...")
+
+            # If schedule question, synthesize a table from markers
+            synthesized_schedule_table = None
+            if is_schedule_query and all_document_chunks:
+                try:
+                    synthesized_schedule_table = _extract_payment_schedule_table([ch.content or '' for ch in all_document_chunks])
+                    if synthesized_schedule_table:
+                        logger.info("Synthesized TABLE DATA for payment schedule")
+                except Exception as e:
+                    logger.warning(f"Failed to synthesize schedule table: {e}")
             
             # Find chunks with specific amount patterns - simplified approach
             amount_chunks = []
@@ -587,6 +656,12 @@ async def find_relevant_context(question: str, document_id: int, db: Session) ->
         
         # Build context
         context_parts = []
+        # Prepend TABLE DATA if we synthesized a schedule
+        try:
+            if is_money_related and 'is_schedule_query' in locals() and is_schedule_query and 'synthesized_schedule_table' in locals() and synthesized_schedule_table:
+                context_parts.append("TABLE DATA:\n" + synthesized_schedule_table)
+        except Exception:
+            pass
         total_len = 0
         max_context_length = 6000  # Increased for financial queries
         

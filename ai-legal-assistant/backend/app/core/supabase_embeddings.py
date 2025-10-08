@@ -49,24 +49,29 @@ class SupabaseEmbeddingService:
             # Initialize sentence-transformers
             self._sentence_transformer = _lazy_import_sentence_transformers()
             if self._sentence_transformer:
-                # Use the smaller, already-downloaded model to avoid large downloads
-                logger.info("Using all-MiniLM-L6-v2 (already downloaded, no network required)")
-                self.embedding_model = self._sentence_transformer('all-MiniLM-L6-v2')
-                self.dimension = 384
+                # Use InLegalBERT for legal document embeddings
+                logger.info("Loading law-ai/InLegalBERT for legal document embeddings")
+                self.embedding_model = self._sentence_transformer('law-ai/InLegalBERT')
+                self.dimension = 768  # BERT embeddings are 768-dimensional
                 self.uses_e5 = False
-                logger.info("Using all-MiniLM-L6-v2 embeddings with Supabase")
+                logger.info("Using InLegalBERT embeddings with Supabase")
 
-                # Skip CrossEncoder to avoid additional downloads
-                logger.info("Skipping CrossEncoder to avoid network downloads")
-                self._reranker = None
+                # Initialize CrossEncoder for reranking
+                self._cross_encoder = _lazy_import_cross_encoder()
+                if self._cross_encoder:
+                    logger.info("Loading CrossEncoder for reranking")
+                    self._reranker = self._cross_encoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+                else:
+                    logger.warning("CrossEncoder not available, skipping reranking")
+                    self._reranker = None
             else:
                 self.embedding_model = None
-                self.dimension = 384
+                self.dimension = 768
                 logger.warning("No embedding model available; embeddings disabled")
         except Exception as e:
             logger.error(f"Error initializing embedding model: {e}")
             self.embedding_model = None
-            self.dimension = 384
+            self.dimension = 768
     
     def generate_embedding(self, text: str) -> List[float]:
         """Generate embedding for a single text"""

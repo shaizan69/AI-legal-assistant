@@ -1,5 +1,5 @@
 """
-Groq LLM Service for Legal Document Analysis using openai/gpt-oss-120b
+Groq LLM Service for Legal Document Analysis using groq/compound
 """
 
 import asyncio
@@ -14,11 +14,12 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 class GroqLLMService:
-    """Service for interacting with Groq API using openai/gpt-oss-120b"""
+    """Service for interacting with Groq API using groq/compound"""
     
     def __init__(self):
         self.api_key = settings.GROQ_API_KEY
-        self.model = settings.GROQ_MODEL
+        # Force model to groq/compound (overrides any env/os value)
+        self.model = "groq/compound"
         # Default to official Groq OpenAI-compatible endpoint if not provided
         self.base_url = settings.GROQ_BASE_URL or "https://api.groq.com/openai/v1"
         self.headers = {
@@ -150,17 +151,22 @@ When users ask about money, costs, payments, fees, or financial terms, you shoul
        - If asked about table contents, provide detailed breakdown of all relevant rows and columns
        - Calculate totals, subtotals, and percentages from table data when relevant
 
-LEGAL DOCUMENT CONTEXT:
+LEGAL DOCUMENT CONTEXT (read strictly):
 {context}
 
 USER QUESTION: {question}
 
-CRITICAL REMINDER: 
+CRITICAL REMINDER:
 - The context above contains the actual document content
 - You MUST analyze this specific context, not give generic responses
 - Look for amounts like 187,450/-, 749,800/-, 221,191/-, 884,764/-, etc.
 - If you see amounts in the context, report them with their context
 - Do NOT say "no amounts found" if amounts are clearly present in the context
+
+IF CONTEXT CONTAINS A SECTION STARTING WITH "TABLE DATA:":
+- Treat it as authoritative structured data for answering table/schedule questions
+- Prioritize extracting directly from this table before reading narrative text
+- For payment schedule questions, return a concise markdown table of stages and amounts, followed by a one-line total
 
 RESPONSE GUIDELINES:
 - Start with a direct answer if possible

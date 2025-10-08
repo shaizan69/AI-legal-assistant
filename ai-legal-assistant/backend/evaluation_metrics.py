@@ -1,255 +1,316 @@
 #!/usr/bin/env python3
 """
-Evaluation metrics for Indian Legal Document Assistant
+Evaluation Metrics for Contextual Reasoning Legal Document Assistant
 """
 
-import re
 import json
+import re
 from typing import Dict, List, Any, Tuple
-from dataclasses import dataclass
-import numpy as np
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
-import logging
+import numpy as np
 
-logger = logging.getLogger(__name__)
-
-@dataclass
-class EvaluationResult:
-    """Evaluation result container"""
-    answer_accuracy: float
-    clause_accuracy: float
-    amount_accuracy: float
-    structure_compliance: float
-    hallucination_rate: float
-    overall_score: float
-
-class IndianLegalEvaluator:
-    """Evaluator for Indian Legal Document Assistant"""
+class LegalDocumentEvaluator:
+    """Evaluator for legal document understanding tasks"""
     
     def __init__(self):
-        self.amount_patterns = [
-            r'INR\s*(\d+(?:,\d{3})*(?:\.\d{2})?)',
-            r'Rs\.?\s*(\d+(?:,\d{3})*(?:\.\d{2})?)',
-            r'(\d+(?:,\d{3})*(?:\.\d{2})?)\s*/-',
-            r'(\d+(?:,\d{3})*(?:\.\d{2})?)\s*rupees?',
-            r'(\d+(?:,\d{3})*(?:\.\d{2})?)\s*%'
+        self.required_fields = ["answer", "reasoning", "clause_reference", "confidence"]
+        
+    def extract_structured_output(self, text: str) -> Dict[str, str]:
+        """Extract structured output from model response"""
+        result = {}
+        
+        # Extract Answer
+        answer_match = re.search(r'\*\*Answer:\*\*\s*(.+?)(?=\*\*|$)', text, re.DOTALL)
+        if answer_match:
+            result["answer"] = answer_match.group(1).strip()
+        
+        # Extract Reasoning
+        reasoning_match = re.search(r'\*\*Reasoning:\*\*\s*(.+?)(?=\*\*|$)', text, re.DOTALL)
+        if reasoning_match:
+            result["reasoning"] = reasoning_match.group(1).strip()
+        
+        # Extract Clause Reference
+        clause_match = re.search(r'\*\*Clause Reference:\*\*\s*(.+?)(?=\*\*|$)', text, re.DOTALL)
+        if clause_match:
+            result["clause_reference"] = clause_match.group(1).strip()
+        
+        # Extract Confidence
+        confidence_match = re.search(r'\*\*Confidence:\*\*\s*(.+?)(?=\*\*|$)', text, re.DOTALL)
+        if confidence_match:
+            result["confidence"] = confidence_match.group(1).strip()
+        
+        return result
+    
+    def evaluate_contextual_accuracy(self, predicted: Dict[str, str], expected: Dict[str, str]) -> float:
+        """Evaluate if answer aligns with full clause meaning"""
+        if "answer" not in predicted or "answer" not in expected:
+            return 0.0
+        
+        pred_answer = predicted["answer"].lower().strip()
+        exp_answer = expected["answer"].lower().strip()
+        
+        # Simple string similarity (can be enhanced with semantic similarity)
+        if pred_answer == exp_answer:
+            return 1.0
+        
+        # Check for key financial terms and amounts
+        pred_amounts = re.findall(r'[\d,]+(?:\.\d{2})?', pred_answer)
+        exp_amounts = re.findall(r'[\d,]+(?:\.\d{2})?', exp_answer)
+        
+        if pred_amounts and exp_amounts:
+            # Check if amounts match
+            pred_amounts_clean = [amt.replace(',', '') for amt in pred_amounts]
+            exp_amounts_clean = [amt.replace(',', '') for amt in exp_amounts]
+            
+            if set(pred_amounts_clean) == set(exp_amounts_clean):
+                return 0.8  # Partial credit for correct amounts
+        
+        # Check for key terms
+        key_terms = ['payment', 'schedule', 'installment', 'advance', 'penalty', 'interest', 'refund']
+        pred_terms = [term for term in key_terms if term in pred_answer]
+        exp_terms = [term for term in key_terms if term in exp_answer]
+        
+        if pred_terms and exp_terms:
+            term_overlap = len(set(pred_terms) & set(exp_terms)) / len(set(exp_terms))
+            return term_overlap * 0.6
+        
+        return 0.0
+    
+    def evaluate_monetary_parsing(self, predicted: Dict[str, str], expected: Dict[str, str]) -> float:
+        """Evaluate correct extraction of INR values, %, and timelines"""
+        if "answer" not in predicted or "answer" not in expected:
+            return 0.0
+        
+        pred_answer = predicted["answer"]
+        exp_answer = expected["answer"]
+        
+        # Extract monetary values
+        pred_amounts = re.findall(r'[\d,]+(?:\.\d{2})?', pred_answer)
+        exp_amounts = re.findall(r'[\d,]+(?:\.\d{2})?', exp_answer)
+        
+        # Extract percentages
+        pred_percentages = re.findall(r'(\d+(?:\.\d+)?%)', pred_answer)
+        exp_percentages = re.findall(r'(\d+(?:\.\d+)?%)', exp_answer)
+        
+        # Extract time periods
+        pred_time = re.findall(r'(\d+\s*(?:days?|months?|years?))', pred_answer.lower())
+        exp_time = re.findall(r'(\d+\s*(?:days?|months?|years?))', exp_answer.lower())
+        
+        # Calculate precision for each type
+        amount_precision = self._calculate_precision(pred_amounts, exp_amounts)
+        percentage_precision = self._calculate_precision(pred_percentages, exp_percentages)
+        time_precision = self._calculate_precision(pred_time, exp_time)
+        
+        # Weighted average
+        total_weight = len(exp_amounts) + len(exp_percentages) + len(exp_time)
+        if total_weight == 0:
+            return 1.0 if not pred_amounts and not pred_percentages and not pred_time else 0.0
+        
+        weighted_score = (
+            amount_precision * len(exp_amounts) +
+            percentage_precision * len(exp_percentages) +
+            time_precision * len(exp_time)
+        ) / total_weight
+        
+        return weighted_score
+    
+    def _calculate_precision(self, predicted: List[str], expected: List[str]) -> float:
+        """Calculate precision between predicted and expected lists"""
+        if not expected:
+            return 1.0 if not predicted else 0.0
+        
+        # Normalize values for comparison
+        pred_normalized = [val.replace(',', '').strip() for val in predicted]
+        exp_normalized = [val.replace(',', '').strip() for val in expected]
+        
+        correct = 0
+        for exp_val in exp_normalized:
+            if exp_val in pred_normalized:
+                correct += 1
+        
+        return correct / len(expected)
+    
+    def evaluate_reasoning_consistency(self, predicted: Dict[str, str], expected: Dict[str, str]) -> float:
+        """Evaluate correctness of reasoning section"""
+        if "reasoning" not in predicted or "reasoning" not in expected:
+            return 0.0
+        
+        pred_reasoning = predicted["reasoning"].lower()
+        exp_reasoning = expected["reasoning"].lower()
+        
+        # Check for key reasoning indicators
+        reasoning_indicators = [
+            'extracted from', 'based on', 'according to', 'clause', 'section',
+            'explicitly', 'implicitly', 'conditional', 'dependent on'
         ]
         
-        self.clause_patterns = [
-            r'Section\s+(\d+)',
-            r'Clause\s+(\d+)',
-            r'Article\s+(\d+)',
-            r'Paragraph\s+(\d+)',
-            r'Sub-section\s+(\d+)'
-        ]
-    
-    def extract_amounts(self, text: str) -> List[str]:
-        """Extract monetary amounts from text"""
-        amounts = []
-        for pattern in self.amount_patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            amounts.extend(matches)
-        return amounts
-    
-    def extract_clause_references(self, text: str) -> List[str]:
-        """Extract clause references from text"""
-        references = []
-        for pattern in self.clause_patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            references.extend(matches)
-        return references
-    
-    def check_structure_compliance(self, response: str) -> float:
-        """Check if response follows the required structure"""
-        required_sections = ['Answer:', 'Clause Reference:', 'Amount:', 'Summary:']
-        found_sections = sum(1 for section in required_sections if section in response)
+        pred_indicators = [ind for ind in reasoning_indicators if ind in pred_reasoning]
+        exp_indicators = [ind for ind in reasoning_indicators if ind in exp_reasoning]
         
-        # Bonus points for table data handling
-        table_indicators = ['TABLE DATA:', '|', 'table', 'Table']
-        has_table_handling = any(indicator in response for indicator in table_indicators)
+        if not exp_indicators:
+            return 1.0 if not pred_indicators else 0.5
         
-        base_score = found_sections / len(required_sections)
-        if has_table_handling:
-            base_score = min(1.0, base_score + 0.1)  # Small bonus for table handling
-        
-        return base_score
+        indicator_overlap = len(set(pred_indicators) & set(exp_indicators)) / len(set(exp_indicators))
+        return indicator_overlap
     
-    def detect_hallucination(self, response: str, context: str) -> bool:
-        """Detect if response contains hallucinated information"""
-        # Simple heuristic: check if response contains information not in context
-        response_lower = response.lower()
-        context_lower = context.lower()
+    def evaluate_hallucination_rate(self, predicted: Dict[str, str], expected: Dict[str, str]) -> float:
+        """Penalize unsupported or fabricated answers"""
+        if "answer" not in predicted or "answer" not in expected:
+            return 1.0  # Full penalty for missing answer
         
-        # Check for common hallucination patterns
+        pred_answer = predicted["answer"].lower()
+        exp_answer = expected["answer"].lower()
+        
+        # Check for hallucination indicators
         hallucination_indicators = [
-            'no monetary figure is present',
-            'the excerpt contains only',
-            'no amounts found',
-            'not mentioned in the document',
-            'cannot find any information'
+            'not specified', 'not mentioned', 'not defined', 'not available',
+            'not included', 'not disclosed', 'not provided', 'not stated'
         ]
         
-        for indicator in hallucination_indicators:
-            if indicator in response_lower and any(amount in context_lower for amount in ['rs.', 'inr', '/-', 'rupees']):
-                return True
+        pred_has_negation = any(ind in pred_answer for ind in hallucination_indicators)
+        exp_has_negation = any(ind in exp_answer for ind in hallucination_indicators)
         
-        return False
+        # If expected has negation but predicted doesn't, it's a hallucination
+        if exp_has_negation and not pred_has_negation:
+            return 1.0
+        
+        # If predicted has negation but expected doesn't, it's a hallucination
+        if pred_has_negation and not exp_has_negation:
+            return 1.0
+        
+        # If both have negation, check if they're consistent
+        if pred_has_negation and exp_has_negation:
+            return 0.0  # No hallucination penalty
+        
+        # Check for fabricated information
+        pred_amounts = re.findall(r'[\d,]+(?:\.\d{2})?', pred_answer)
+        exp_amounts = re.findall(r'[\d,]+(?:\.\d{2})?', exp_answer)
+        
+        # If predicted has amounts but expected doesn't, it's a hallucination
+        if pred_amounts and not exp_amounts:
+            return 1.0
+        
+        # If expected has amounts but predicted doesn't, it's a hallucination
+        if exp_amounts and not pred_amounts:
+            return 1.0
+        
+        return 0.0
     
-    def evaluate_single_response(self, response: str, expected: str, context: str) -> Dict[str, Any]:
-        """Evaluate a single response"""
-        # Extract elements
-        response_amounts = self.extract_amounts(response)
-        expected_amounts = self.extract_amounts(expected)
+    def evaluate_clause_identification(self, predicted: Dict[str, str], expected: Dict[str, str]) -> float:
+        """Evaluate correct clause reference recognition"""
+        if "clause_reference" not in predicted or "clause_reference" not in expected:
+            return 0.0
         
-        response_clauses = self.extract_clause_references(response)
-        expected_clauses = self.extract_clause_references(expected)
+        pred_ref = predicted["clause_reference"].lower().strip()
+        exp_ref = expected["clause_reference"].lower().strip()
         
-        # Calculate metrics
-        amount_accuracy = 1.0 if response_amounts == expected_amounts else 0.0
-        clause_accuracy = 1.0 if response_clauses == expected_clauses else 0.0
+        # Exact match
+        if pred_ref == exp_ref:
+            return 1.0
         
-        # Structure compliance
-        structure_compliance = self.check_structure_compliance(response)
+        # Partial match for clause numbers
+        pred_clause_num = re.search(r'clause\s*(\d+)', pred_ref)
+        exp_clause_num = re.search(r'clause\s*(\d+)', exp_ref)
         
-        # Hallucination detection
-        is_hallucination = self.detect_hallucination(response, context)
+        if pred_clause_num and exp_clause_num:
+            if pred_clause_num.group(1) == exp_clause_num.group(1):
+                return 0.8
+        
+        # Check for section numbers
+        pred_section_num = re.search(r'section\s*(\d+(?:\.\d+)?)', pred_ref)
+        exp_section_num = re.search(r'section\s*(\d+(?:\.\d+)?)', exp_ref)
+        
+        if pred_section_num and exp_section_num:
+            if pred_section_num.group(1) == exp_section_num.group(1):
+                return 0.8
+        
+        return 0.0
+    
+    def evaluate_confidence_calibration(self, predicted: Dict[str, str], expected: Dict[str, str]) -> float:
+        """Evaluate if confidence levels are appropriately calibrated"""
+        if "confidence" not in predicted or "confidence" not in expected:
+            return 0.0
+        
+        pred_conf = predicted["confidence"].lower().strip()
+        exp_conf = expected["confidence"].lower().strip()
+        
+        # Map confidence levels to numeric values
+        conf_map = {"high": 3, "medium": 2, "low": 1}
+        
+        pred_num = conf_map.get(pred_conf, 0)
+        exp_num = conf_map.get(exp_conf, 0)
+        
+        if pred_num == exp_num:
+            return 1.0
+        
+        # Partial credit for close confidence levels
+        if abs(pred_num - exp_num) == 1:
+            return 0.5
+        
+        return 0.0
+    
+    def evaluate_single_example(self, predicted: str, expected: Dict[str, str]) -> Dict[str, float]:
+        """Evaluate a single example"""
+        pred_structured = self.extract_structured_output(predicted)
         
         return {
-            'amount_accuracy': amount_accuracy,
-            'clause_accuracy': clause_accuracy,
-            'structure_compliance': structure_compliance,
-            'is_hallucination': is_hallucination,
-            'response_amounts': response_amounts,
-            'expected_amounts': expected_amounts,
-            'response_clauses': response_clauses,
-            'expected_clauses': expected_clauses
+            "contextual_accuracy": self.evaluate_contextual_accuracy(pred_structured, expected),
+            "monetary_parsing": self.evaluate_monetary_parsing(pred_structured, expected),
+            "reasoning_consistency": self.evaluate_reasoning_consistency(pred_structured, expected),
+            "hallucination_rate": self.evaluate_hallucination_rate(pred_structured, expected),
+            "clause_identification": self.evaluate_clause_identification(pred_structured, expected),
+            "confidence_calibration": self.evaluate_confidence_calibration(pred_structured, expected)
         }
     
-    def evaluate_batch(self, responses: List[str], expected: List[str], contexts: List[str]) -> EvaluationResult:
-        """Evaluate a batch of responses"""
-        if len(responses) != len(expected) or len(responses) != len(contexts):
-            raise ValueError("All lists must have the same length")
+    def evaluate_batch(self, predictions: List[str], expected: List[Dict[str, str]]) -> Dict[str, float]:
+        """Evaluate a batch of examples"""
+        if len(predictions) != len(expected):
+            raise ValueError("Predictions and expected outputs must have the same length")
         
-        results = []
-        for response, exp, context in zip(responses, expected, contexts):
-            result = self.evaluate_single_response(response, exp, context)
-            results.append(result)
+        all_scores = []
+        for pred, exp in zip(predictions, expected):
+            scores = self.evaluate_single_example(pred, exp)
+            all_scores.append(scores)
         
-        # Calculate aggregate metrics
-        amount_accuracies = [r['amount_accuracy'] for r in results]
-        clause_accuracies = [r['clause_accuracy'] for r in results]
-        structure_compliances = [r['structure_compliance'] for r in results]
-        hallucinations = [r['is_hallucination'] for r in results]
+        # Calculate average scores
+        avg_scores = {}
+        for metric in all_scores[0].keys():
+            avg_scores[metric] = np.mean([score[metric] for score in all_scores])
         
-        # Overall metrics
-        answer_accuracy = np.mean([acc for acc in amount_accuracies if acc > 0])
-        clause_accuracy = np.mean(clause_accuracies)
-        amount_accuracy = np.mean(amount_accuracies)
-        structure_compliance = np.mean(structure_compliances)
-        hallucination_rate = np.mean(hallucinations)
+        # Calculate overall score (weighted average)
+        weights = {
+            "contextual_accuracy": 0.3,
+            "monetary_parsing": 0.25,
+            "reasoning_consistency": 0.15,
+            "hallucination_rate": 0.15,
+            "clause_identification": 0.1,
+            "confidence_calibration": 0.05
+        }
         
-        # Overall score (weighted average)
-        overall_score = (
-            0.3 * answer_accuracy +
-            0.25 * clause_accuracy +
-            0.25 * amount_accuracy +
-            0.15 * structure_compliance +
-            0.05 * (1 - hallucination_rate)  # Lower hallucination rate is better
-        )
+        overall_score = sum(avg_scores[metric] * weight for metric, weight in weights.items())
+        avg_scores["overall_score"] = overall_score
         
-        return EvaluationResult(
-            answer_accuracy=answer_accuracy,
-            clause_accuracy=clause_accuracy,
-            amount_accuracy=amount_accuracy,
-            structure_compliance=structure_compliance,
-            hallucination_rate=hallucination_rate,
-            overall_score=overall_score
-        )
-    
-    def generate_evaluation_report(self, evaluation_result: EvaluationResult) -> str:
-        """Generate a detailed evaluation report"""
-        report = f"""
-INDIAN LEGAL DOCUMENT ASSISTANT - EVALUATION REPORT
-==================================================
+        return avg_scores
 
-OVERALL PERFORMANCE SCORE: {evaluation_result.overall_score:.2%}
-
-DETAILED METRICS:
------------------
-Answer Accuracy:        {evaluation_result.answer_accuracy:.2%}
-Clause Reference:       {evaluation_result.clause_accuracy:.2%}
-Amount Extraction:      {evaluation_result.amount_accuracy:.2%}
-Structure Compliance:   {evaluation_result.structure_compliance:.2%}
-Hallucination Rate:     {evaluation_result.hallucination_rate:.2%}
-
-INTERPRETATION:
----------------
-- Answer Accuracy: How well the model provides correct answers
-- Clause Reference: Accuracy of legal clause/section references
-- Amount Extraction: Precision in extracting monetary values
-- Structure Compliance: Adherence to required response format
-- Hallucination Rate: Frequency of fabricated information
-
-RECOMMENDATIONS:
-----------------
-"""
-        
-        if evaluation_result.overall_score >= 0.8:
-            report += "✅ Model performance is excellent. Ready for production use."
-        elif evaluation_result.overall_score >= 0.6:
-            report += "⚠️ Model performance is good but needs improvement in some areas."
-        else:
-            report += "❌ Model performance needs significant improvement before production use."
-        
-        if evaluation_result.hallucination_rate > 0.1:
-            report += "\n⚠️ High hallucination rate detected. Consider additional training data."
-        
-        if evaluation_result.amount_accuracy < 0.7:
-            report += "\n⚠️ Amount extraction accuracy is low. Focus on financial data training."
-        
-        if evaluation_result.structure_compliance < 0.8:
-            report += "\n⚠️ Response structure compliance is low. Improve prompt engineering."
-        
-        return report
-
-def load_validation_data(file_path: str) -> List[Dict[str, Any]]:
-    """Load validation data from JSONL file"""
-    data = []
-    with open(file_path, 'r', encoding='utf-8') as f:
-        for line in f:
-            data.append(json.loads(line))
-    return data
-
-def run_evaluation(validation_file: str, model_responses: List[str]) -> EvaluationResult:
-    """Run complete evaluation"""
-    evaluator = IndianLegalEvaluator()
+def main():
+    """Example usage of the evaluator"""
+    evaluator = LegalDocumentEvaluator()
     
-    # Load validation data
-    validation_data = load_validation_data(validation_file)
+    # Example evaluation
+    predicted = """**Answer:** Rs. 5,00,000/- advance at execution, balance Rs. 45,00,000/- within 90 days of possession.
+**Reasoning:** Two-stage payment structure with specific amounts and timelines.
+**Clause Reference:** Section 3.2
+**Confidence:** High"""
     
-    # Extract expected responses and contexts
-    expected_responses = [item['expected_output'] for item in validation_data]
-    contexts = [item['input'] for item in validation_data]
+    expected = {
+        "answer": "Rs. 5,00,000/- advance at execution, balance Rs. 45,00,000/- within 90 days of possession.",
+        "reasoning": "Two-stage payment structure with specific amounts and timelines.",
+        "clause_reference": "Section 3.2",
+        "confidence": "High"
+    }
     
-    # Run evaluation
-    result = evaluator.evaluate_batch(model_responses, expected_responses, contexts)
-    
-    # Generate report
-    report = evaluator.generate_evaluation_report(result)
-    print(report)
-    
-    return result
+    scores = evaluator.evaluate_single_example(predicted, expected)
+    print("Evaluation scores:", scores)
 
 if __name__ == "__main__":
-    # Example usage
-    validation_file = "validation_data.jsonl"
-    
-    # Example model responses (replace with actual model outputs)
-    model_responses = [
-        "**Answer:** Breach penalty is INR 200,000\n**Clause Reference:** Clause 15\n**Amount:** INR 200,000\n**Summary:** Penalty for contract breach",
-        "**Answer:** Contract renewal period is 12 months\n**Clause Reference:** Section 8\n**Amount:** None\n**Summary:** 12-month renewal periods upon mutual agreement",
-        "**Answer:** Advance payment is 30% (INR 300,000)\n**Clause Reference:** Article 6\n**Amount:** INR 300,000\n**Summary:** 30% advance before commencement"
-    ]
-    
-    # Run evaluation
-    result = run_evaluation(validation_file, model_responses)
+    main()

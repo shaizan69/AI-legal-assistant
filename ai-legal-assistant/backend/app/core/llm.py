@@ -1,5 +1,5 @@
 """
-Large Language Model wrapper and utilities using Groq API (openai/gpt-oss-120b)
+Large Language Model wrapper and utilities using Groq API (groq/compound)
 """
 
 import logging
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class LLMService:
-    """Service for interacting with Large Language Models via Groq API (openai/gpt-oss-120b)"""
+    """Service for interacting with Large Language Models via Groq API (groq/compound)"""
     
     def __init__(self):
         # Use Groq service as primary and only provider
@@ -24,19 +24,19 @@ class LLMService:
         return await self.groq_service.generate_text(prompt, max_tokens, temperature)
     
     async def summarize_document(self, text: str, document_type: str = "contract") -> Dict[str, Any]:
-        """Summarize a legal document using Groq openai/gpt-oss-120b"""
+        """Summarize a legal document using Groq groq/compound"""
         return await self.groq_service.summarize_document(text, document_type)
     
     async def detect_risks(self, text: str, document_type: str = "contract") -> Dict[str, Any]:
-        """Detect potential risks in a legal document using Groq openai/gpt-oss-120b"""
+        """Detect potential risks in a legal document using Groq groq/compound"""
         return await self.groq_service.detect_risks(text, document_type)
     
     async def compare_documents(self, doc1_text: str, doc2_text: str, doc1_type: str = "contract", doc2_type: str = "contract") -> Dict[str, Any]:
-        """Compare two legal documents using Groq openai/gpt-oss-120b"""
+        """Compare two legal documents using Groq groq/compound"""
         return await self.groq_service.compare_documents(doc1_text, doc2_text)
     
     async def answer_question(self, question: str, context: str) -> Dict[str, Any]:
-        """Answer a question about a legal document using Groq openai/gpt-oss-120b"""
+        """Answer a question about a legal document using Groq groq/compound"""
         return await self.groq_service.answer_question(question, context)
     
     
