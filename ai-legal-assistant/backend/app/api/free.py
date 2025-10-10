@@ -424,7 +424,7 @@ async def cleanup_orphaned_documents(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Failed to cleanup orphaned documents")
 
 
-# Enhanced context retrieval with financial information focus
+# Enhanced context retrieval with financial information focus and multi-pass analysis
 async def find_relevant_context(question: str, document_id: int, db: Session) -> str:
     try:
         # Check if question is money-related
@@ -440,6 +440,28 @@ async def find_relevant_context(question: str, document_id: int, db: Session) ->
                 'on booking', 'on agreement', 'slab'
             ]
             is_schedule_query = any(k in question.lower() for k in schedule_keywords)
+            
+            # Multi-pass financial analysis for comprehensive data extraction
+            from app.core.utils import multi_pass_financial_analysis
+            
+            # Get all document chunks for multi-pass analysis
+            all_document_chunks = db.query(DocumentChunk).filter(
+                DocumentChunk.document_id == document_id
+            ).order_by(DocumentChunk.chunk_index.asc()).all()
+            
+            # Combine all chunks for comprehensive analysis
+            full_document_text = "\n\n".join([ch.content or "" for ch in all_document_chunks])
+            
+            # Perform multi-pass financial analysis
+            financial_analysis = multi_pass_financial_analysis(full_document_text)
+            
+            logger.info(f"Multi-pass analysis found:")
+            logger.info(f"- {len(financial_analysis['amounts'])} monetary amounts")
+            logger.info(f"- {len(financial_analysis['payment_schedules'])} payment schedules")
+            logger.info(f"- {len(financial_analysis['financial_terms'])} financial terms")
+            logger.info(f"- {len(financial_analysis['tables'])} tables")
+            logger.info(f"- {len(financial_analysis['calculations'])} calculations")
+            
             # For money-related questions, use aggressive amount detection
             question_embedding = embedding_service.generate_embedding(question)
             base_k = 25  # Further increased for financial queries
@@ -654,16 +676,56 @@ async def find_relevant_context(question: str, document_id: int, db: Session) ->
                 DocumentChunk.chunk_index.in_(sorted([i for i in candidate_indices if i >= 0]))
             ).order_by(DocumentChunk.chunk_index.asc()).all()
         
-        # Build context
+        # Build context with enhanced financial analysis
         context_parts = []
+        
+        # Add comprehensive financial analysis summary
+        if is_money_related and 'financial_analysis' in locals():
+            context_parts.append("=== COMPREHENSIVE FINANCIAL ANALYSIS ===")
+            
+            # Add monetary amounts with context
+            if financial_analysis['amounts']:
+                context_parts.append(f"\nMONETARY AMOUNTS FOUND ({len(financial_analysis['amounts'])}):")
+                for i, amount_data in enumerate(financial_analysis['amounts'][:10]):  # Limit to first 10
+                    context_parts.append(f"{i+1}. {amount_data['amount']} - Context: {amount_data['context']}")
+            
+            # Add payment schedules
+            if financial_analysis['payment_schedules']:
+                context_parts.append(f"\nPAYMENT SCHEDULES FOUND ({len(financial_analysis['payment_schedules'])}):")
+                for i, schedule in enumerate(financial_analysis['payment_schedules'][:3]):  # Limit to first 3
+                    context_parts.append(f"{i+1}. {schedule['text'][:200]}...")
+            
+            # Add financial terms
+            if financial_analysis['financial_terms']:
+                context_parts.append(f"\nFINANCIAL TERMS FOUND ({len(financial_analysis['financial_terms'])}):")
+                for i, term in enumerate(financial_analysis['financial_terms'][:10]):  # Limit to first 10
+                    context_parts.append(f"{i+1}. {term['term']}")
+            
+            # Add tables
+            if financial_analysis['tables']:
+                context_parts.append(f"\nTABLES FOUND ({len(financial_analysis['tables'])}):")
+                for i, table in enumerate(financial_analysis['tables'][:3]):  # Limit to first 3
+                    context_parts.append(f"Table {i+1} ({table['type']}): Headers: {table['headers']}")
+                    for j, row in enumerate(table['rows'][:5]):  # First 5 rows
+                        context_parts.append(f"  Row {j+1}: {row['data']}")
+            
+            # Add calculations
+            if financial_analysis['calculations']:
+                context_parts.append(f"\nCALCULATIONS FOUND ({len(financial_analysis['calculations'])}):")
+                for i, calc in enumerate(financial_analysis['calculations'][:5]):  # Limit to first 5
+                    context_parts.append(f"{i+1}. {calc['calculation']}")
+            
+            context_parts.append("\n=== END FINANCIAL ANALYSIS ===\n")
+        
         # Prepend TABLE DATA if we synthesized a schedule
         try:
             if is_money_related and 'is_schedule_query' in locals() and is_schedule_query and 'synthesized_schedule_table' in locals() and synthesized_schedule_table:
                 context_parts.append("TABLE DATA:\n" + synthesized_schedule_table)
         except Exception:
             pass
+        
         total_len = 0
-        max_context_length = 6000  # Increased for financial queries
+        max_context_length = 8000  # Increased for comprehensive financial analysis
         
         logger.info(f"Building context from {len(all_chunks)} chunks for document {document_id}")
         

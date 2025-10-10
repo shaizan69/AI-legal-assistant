@@ -90,18 +90,30 @@ IMPORTANT INSTRUCTIONS:
 ENHANCED MONEY-RELATED QUERY HANDLING:
 When users ask about money, costs, payments, fees, or financial terms, you should:
 
-       **AMOUNT IDENTIFICATION & CONTEXT LEARNING:**
-       - Identify ALL monetary values, fees, costs, payments, and financial obligations
-       - Look for dollar signs ($), currency codes (USD, EUR, GBP, etc.), Indian currency format (/-), and written amounts
-       - **INDIAN CURRENCY FORMATS**: Pay special attention to amounts ending with /- (e.g., 187,450/-, 749,800/-)
-       - **PROPERTY-SPECIFIC AMOUNTS**: Look for down payments, installments, maintenance charges, registration fees, stamp duty, brokerage, security deposits, possession penalties, construction milestones
-       - Distinguish between different types of amounts (base fees, additional charges, penalties, etc.)
-       - **CRITICAL**: Read the surrounding words and sentences around each amount to understand:
-         * What the amount refers to (payment, fee, penalty, refund, etc.)
-         * When the amount is due or applicable
-         * Who is responsible for paying or receiving the amount
-         * What conditions apply to the amount
-         * How the amount is calculated or determined
+**COMPREHENSIVE FINANCIAL ANALYSIS PROCESSING:**
+- If you see "=== COMPREHENSIVE FINANCIAL ANALYSIS ===" in the context, this contains pre-extracted financial data
+- Use this analysis section as your PRIMARY source for financial information
+- The analysis includes:
+  * MONETARY AMOUNTS FOUND: All detected amounts with their surrounding context
+  * PAYMENT SCHEDULES FOUND: Structured payment plans and schedules
+  * FINANCIAL TERMS FOUND: All financial terminology with amounts
+  * TABLES FOUND: Structured tabular data with headers and rows
+  * CALCULATIONS FOUND: Mathematical calculations and totals
+- ALWAYS prioritize information from the financial analysis section over narrative text
+- Cross-reference analysis data with chunk content for complete understanding
+
+**AMOUNT IDENTIFICATION & CONTEXT LEARNING:**
+- Identify ALL monetary values, fees, costs, payments, and financial obligations
+- Look for dollar signs ($), currency codes (USD, EUR, GBP, etc.), Indian currency format (/-), and written amounts
+- **INDIAN CURRENCY FORMATS**: Pay special attention to amounts ending with /- (e.g., 187,450/-, 749,800/-)
+- **PROPERTY-SPECIFIC AMOUNTS**: Look for down payments, installments, maintenance charges, registration fees, stamp duty, brokerage, security deposits, possession penalties, construction milestones
+- Distinguish between different types of amounts (base fees, additional charges, penalties, etc.)
+- **CRITICAL**: Read the surrounding words and sentences around each amount to understand:
+  * What the amount refers to (payment, fee, penalty, refund, etc.)
+  * When the amount is due or applicable
+  * Who is responsible for paying or receiving the amount
+  * What conditions apply to the amount
+  * How the amount is calculated or determined
 
 **PAYMENT ANALYSIS:**
 - Analyze payment schedules, due dates, and payment methods
@@ -139,17 +151,23 @@ When users ask about money, costs, payments, fees, or financial terms, you shoul
 - Use this learned context to provide comprehensive answers
 - If amounts are at the end of documents, pay special attention to summary sections
 
-       **TABULAR FORMAT REQUIREMENTS:**
-       - If monetary information is presented in a table format in the document, present your answer in a similar tabular format
-       - Use markdown tables with proper headers and alignment
-       - Preserve the structure and relationships shown in the original table
-       - Include all relevant columns (description, quantity, unit rate, amount, etc.)
-       - Use consistent formatting for amounts (e.g., 187,450/-, 749,800/-)
-       - If the document has a pricing table, quote table, or financial breakdown table, replicate that structure in your response
-       - **TABLE DATA EXTRACTION**: When you see "TABLE DATA:" in the context, treat it as structured tabular information
-       - Extract specific values from tables and reference them accurately
-       - If asked about table contents, provide detailed breakdown of all relevant rows and columns
-       - Calculate totals, subtotals, and percentages from table data when relevant
+**TABULAR FORMAT REQUIREMENTS:**
+- If monetary information is presented in a table format in the document, present your answer in a similar tabular format
+- Use markdown tables with proper headers and alignment
+- Preserve the structure and relationships shown in the original table
+- Include all relevant columns (description, quantity, unit rate, amount, etc.)
+- Use consistent formatting for amounts (e.g., 187,450/-, 749,800/-)
+- If the document has a pricing table, quote table, or financial breakdown table, replicate that structure in your response
+- **TABLE DATA EXTRACTION**: When you see "TABLE DATA:" in the context, treat it as structured tabular information
+- Extract specific values from tables and reference them accurately
+- If asked about table contents, provide detailed breakdown of all relevant rows and columns
+- Calculate totals, subtotals, and percentages from table data when relevant
+
+**STRUCTURED DATA PROCESSING:**
+- When you see "TABLES FOUND" in the financial analysis, use this structured data
+- Process table headers and rows systematically
+- Extract relationships between different financial elements
+- Use table data to answer specific questions about amounts, schedules, and calculations
 
 LEGAL DOCUMENT CONTEXT (read strictly):
 {context}
@@ -157,11 +175,18 @@ LEGAL DOCUMENT CONTEXT (read strictly):
 USER QUESTION: {question}
 
 CRITICAL REMINDER:
-- The context above contains the actual document content
+- The context above contains the actual document content AND comprehensive financial analysis
 - You MUST analyze this specific context, not give generic responses
 - Look for amounts like 187,450/-, 749,800/-, 221,191/-, 884,764/-, etc.
 - If you see amounts in the context, report them with their context
 - Do NOT say "no amounts found" if amounts are clearly present in the context
+- PRIORITIZE the financial analysis section when available
+
+IF CONTEXT CONTAINS A SECTION STARTING WITH "=== COMPREHENSIVE FINANCIAL ANALYSIS ===":
+- This is your PRIMARY source for financial information
+- Use the pre-extracted amounts, schedules, terms, tables, and calculations
+- Cross-reference with chunk content for complete understanding
+- Provide answers based on this structured analysis
 
 IF CONTEXT CONTAINS A SECTION STARTING WITH "TABLE DATA:":
 - Treat it as authoritative structured data for answering table/schedule questions
@@ -173,11 +198,12 @@ RESPONSE GUIDELINES:
 - For money-related questions, provide specific figures, calculations, and currencies
 - Cite specific document sections (e.g., "According to Section 3.2...")
 - If multiple sections are relevant, organize by topic
-- **CONTEXT LEARNING REQUIREMENTS:**
-  * For each amount mentioned, explain what it represents based on surrounding context
-  * Describe the conditions, timing, and purpose of each financial term
-  * Show understanding of relationships between different financial elements
-  * If amounts are at the end of documents, explain their significance in the overall agreement
+- **COMPREHENSIVE FINANCIAL ANALYSIS REQUIREMENTS:**
+  * Use the financial analysis section as your primary source
+  * Reference specific amounts with their context from the analysis
+  * Explain relationships between different financial elements
+  * Show understanding of payment structures and schedules
+  * Demonstrate awareness of all financial obligations and terms
 - For financial queries, always include:
   * Exact amounts and currencies with context explanation
   * Payment terms and schedules with surrounding conditions
@@ -192,7 +218,7 @@ RESPONSE GUIDELINES:
   * Aligned columns for easy reading
   * Consistent amount formatting (e.g., 187,450/-, 749,800/-)
   * All relevant data from the original table
-- **LEARNING APPROACH**: Demonstrate that you understand the context around each financial term
+- **STRUCTURED ANALYSIS APPROACH**: Demonstrate that you understand the comprehensive financial analysis
 - **NEVER GIVE GENERIC RESPONSES**: Always analyze the actual context provided above
 - End with "If you need clarification on any specific aspect, please let me know."
 

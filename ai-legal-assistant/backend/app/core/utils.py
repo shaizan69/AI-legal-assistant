@@ -653,57 +653,157 @@ def format_table_for_chunking(table: Dict[str, Any]) -> str:
     return "\n".join(formatted_lines)
 
 
+def multi_pass_financial_analysis(text: str) -> Dict[str, Any]:
+    """Multi-pass analysis to extract comprehensive financial data"""
+    analysis = {
+        "amounts": [],
+        "currencies": [],
+        "payment_schedules": [],
+        "financial_terms": [],
+        "tables": [],
+        "calculations": [],
+        "contexts": {}
+    }
+    
+    # Pass 1: Extract all monetary amounts with context
+    amount_patterns = [
+        r'[\d,]+(?:\.\d{2})?/-',  # Indian currency
+        r'\$[\d,]+(?:\.\d{2})?',  # USD
+        r'[\d,]+(?:\.\d{2})?\s*(?:USD|EUR|GBP|CAD|AUD|JPY|CHF|CNY|INR)',  # Currency codes
+        r'[\d,]+(?:\.\d{2})?\s*rupees?',  # Written rupees
+        r'[\d,]+(?:\.\d{2})?\s*rs\.?',  # Rs abbreviation
+        r'[\d,]+(?:\.\d{2})?\s*₹',  # Rupee symbol
+    ]
+    
+    for pattern in amount_patterns:
+        matches = re.finditer(pattern, text, re.IGNORECASE)
+        for match in matches:
+            amount = match.group(0)
+            start, end = match.span()
+            
+            # Extract context around the amount (50 chars before and after)
+            context_start = max(0, start - 50)
+            context_end = min(len(text), end + 50)
+            context = text[context_start:context_end]
+            
+            analysis["amounts"].append({
+                "amount": amount,
+                "position": start,
+                "context": context,
+                "pattern_type": "currency"
+            })
+    
+    # Pass 2: Extract payment schedules
+    schedule_patterns = [
+        r'(?:payment\s+schedule|installment\s+plan|payment\s+plan)[\s\S]*?(?=\n\s*\n|\n\s*[A-Z]|\Z)',
+        r'(?:monthly|quarterly|annual)\s+installment[\s\S]*?(?=\n\s*\n|\n\s*[A-Z]|\Z)',
+        r'(?:down\s+payment|advance\s+payment)[\s\S]*?(?=\n\s*\n|\n\s*[A-Z]|\Z)',
+    ]
+    
+    for pattern in schedule_patterns:
+        matches = re.finditer(pattern, text, re.IGNORECASE | re.MULTILINE)
+        for match in matches:
+            schedule_text = match.group(0)
+            analysis["payment_schedules"].append({
+                "text": schedule_text,
+                "position": match.start(),
+                "type": "payment_schedule"
+            })
+    
+    # Pass 3: Extract financial terms with amounts
+    financial_term_patterns = [
+        r'(?:payment|fee|cost|charge|price|amount|total|sum|value|worth|budget|expense|revenue|income|salary|wage|bonus|penalty|fine|refund|deposit|advance|installment|interest|tax|commission|royalty|rent|lease|purchase|sale|compensation|benefits|allowance|stipend|pension|retirement|insurance|premium|deductible|coverage|claim|settlement|award|damages|restitution|reimbursement|subsidy|grant|funding|sponsorship|endorsement|licensing|franchise|dividend|share|stock|bond|security|asset|liability|equity|capital|fund|treasury|budget|forecast|projection|estimate|quotation|proposal|bid|tender|contract|agreement|deal|transaction|exchange|trade|commerce|business|enterprise|corporation|company|firm|partnership|sole proprietorship|llc|inc|corp|ltd|llp|pllc|pc|pa)\s*:?\s*[\d,]+(?:\.\d{2})?',
+    ]
+    
+    for pattern in financial_term_patterns:
+        matches = re.finditer(pattern, text, re.IGNORECASE)
+        for match in matches:
+            term_text = match.group(0)
+            analysis["financial_terms"].append({
+                "term": term_text,
+                "position": match.start(),
+                "type": "financial_term"
+            })
+    
+    # Pass 4: Extract tables
+    tables = extract_tables_from_text(text)
+    for table in tables:
+        analysis["tables"].append({
+            "headers": table["headers"],
+            "rows": table["rows"],
+            "type": table["type"],
+            "start_line": table["start_line"],
+            "end_line": table.get("end_line", table["start_line"])
+        })
+    
+    # Pass 5: Extract calculations
+    calculation_patterns = [
+        r'(?:total|sum|subtotal|grand total|final amount|final cost|final price|final value|final worth|final budget|final expense|final revenue|final income|final salary|final wage|final bonus|final penalty|final fine|final refund|final deposit|final advance|final installment|final interest|final tax|final commission|final royalty|final rent|final lease|final purchase|final sale|final compensation|final benefits|final allowance|final stipend|final pension|final retirement|final insurance|final premium|final deductible|final coverage|final claim|final settlement|final award|final damages|final restitution|final reimbursement|final subsidy|final grant|final funding|final sponsorship|final endorsement|final licensing|final franchise|final dividend|final share|final stock|final bond|final security|final asset|final liability|final equity|final capital|final fund|final treasury|final budget|final forecast|final projection|final estimate|final quotation|final proposal|final bid|final tender|final contract|final agreement|final deal|final transaction|final exchange|final trade|final commerce|final business|final enterprise|final corporation|final company|final firm|final partnership|final sole proprietorship|final llc|final inc|final corp|final ltd|final llp|final pllc|final pc|final pa)\s+(?:is|equals?|=\s*)?\s*[\d,]+(?:\.\d{2})?',
+    ]
+    
+    for pattern in calculation_patterns:
+        matches = re.finditer(pattern, text, re.IGNORECASE)
+        for match in matches:
+            calc_text = match.group(0)
+            analysis["calculations"].append({
+                "calculation": calc_text,
+                "position": match.start(),
+                "type": "calculation"
+            })
+    
+    return analysis
+
+
 def enhance_financial_chunking(text: str) -> str:
-    """Enhance text to better capture financial information for chunking"""
+    """Enhanced financial chunking with advanced monetary data extraction"""
     # First, extract and format tables
     tables = extract_tables_from_text(text)
     
-    # Add markers around financial terms to improve chunking and retrieval
+    # Advanced financial pattern recognition with comprehensive regex patterns
     financial_patterns = [
-        # Dollar amounts and currency
-        (r'\$[\d,]+(?:\.\d{2})?', r'[AMOUNT: \g<0>]'),
-        (r'[\d,]+(?:\.\d{2})?\s*(?:USD|EUR|GBP|CAD|AUD|JPY|CHF|CNY)', r'[AMOUNT: \g<0>]'),
-        # Indian currency format
-        (r'[\d,]+(?:\.\d{2})?/-', r'[AMOUNT: \g<0>]'),
-        (r'[\d,]+(?:\.\d{2})?\s*/-', r'[AMOUNT: \g<0>]'),
-        (r'[\d,]+(?:\.\d{2})?\s*rupees?', r'[AMOUNT: \g<0>]'),
-        (r'[\d,]+(?:\.\d{2})?\s*rs\.?', r'[AMOUNT: \g<0>]'),
+        # Enhanced currency patterns
+        (r'\$[\d,]+(?:\.\d{2})?', r'[CURRENCY_USD: \g<0>]'),
+        (r'[\d,]+(?:\.\d{2})?\s*(?:USD|EUR|GBP|CAD|AUD|JPY|CHF|CNY|INR)', r'[CURRENCY: \g<0>]'),
         
-        # Written amounts
-        (r'(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion|trillion)\s+(?:dollars?|USD|EUR|GBP)', r'[AMOUNT: \g<0>]'),
+        # Indian currency formats (enhanced)
+        (r'[\d,]+(?:\.\d{2})?/-', r'[INDIAN_CURRENCY: \g<0>]'),
+        (r'[\d,]+(?:\.\d{2})?\s*/-', r'[INDIAN_CURRENCY: \g<0>]'),
+        (r'[\d,]+(?:\.\d{2})?\s*rupees?', r'[INDIAN_CURRENCY: \g<0>]'),
+        (r'[\d,]+(?:\.\d{2})?\s*rs\.?', r'[INDIAN_CURRENCY: \g<0>]'),
+        (r'[\d,]+(?:\.\d{2})?\s*₹', r'[INDIAN_CURRENCY: \g<0>]'),
         
-        # Financial terms with amounts
-        (r'(?:payment|fee|cost|charge|price|amount|total|sum|value|worth)\s*:?\s*[\d,]+(?:\.\d{2})?', r'[FINANCIAL: \g<0>]'),
-        (r'(?:payment|fee|cost|charge|price|amount|total|sum|value|worth)\s*of\s*[\d,]+(?:\.\d{2})?', r'[FINANCIAL: \g<0>]'),
+        # Written amounts (enhanced)
+        (r'(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion|trillion|lakh|crore)\s+(?:dollars?|USD|EUR|GBP|rupees?|rs\.?)', r'[WRITTEN_AMOUNT: \g<0>]'),
         
-        # Payment terms
-        (r'(?:due|payable|payable on|payment due)\s*:?\s*[\d,]+(?:\.\d{2})?', r'[PAYMENT: \g<0>]'),
-        (r'(?:due|payable|payable on|payment due)\s*on\s*[\d,]+(?:\.\d{2})?', r'[PAYMENT: \g<0>]'),
+        # Financial terms with amounts (enhanced)
+        (r'(?:payment|fee|cost|charge|price|amount|total|sum|value|worth|budget|expense|revenue|income|salary|wage|bonus|penalty|fine|refund|deposit|advance|installment|interest|tax|commission|royalty|rent|lease|purchase|sale|compensation|benefits|allowance|stipend|pension|retirement|insurance|premium|deductible|coverage|claim|settlement|award|damages|restitution|reimbursement|subsidy|grant|funding|sponsorship|endorsement|licensing|franchise|dividend|share|stock|bond|security|asset|liability|equity|capital|fund|treasury|budget|forecast|projection|estimate|quotation|proposal|bid|tender|contract|agreement|deal|transaction|exchange|trade|commerce|business|enterprise|corporation|company|firm|partnership|sole proprietorship|llc|inc|corp|ltd|llp|pllc|pc|pa)\s*:?\s*[\d,]+(?:\.\d{2})?', r'[FINANCIAL_TERM: \g<0>]'),
+        (r'(?:payment|fee|cost|charge|price|amount|total|sum|value|worth|budget|expense|revenue|income|salary|wage|bonus|penalty|fine|refund|deposit|advance|installment|interest|tax|commission|royalty|rent|lease|purchase|sale|compensation|benefits|allowance|stipend|pension|retirement|insurance|premium|deductible|coverage|claim|settlement|award|damages|restitution|reimbursement|subsidy|grant|funding|sponsorship|endorsement|licensing|franchise|dividend|share|stock|bond|security|asset|liability|equity|capital|fund|treasury|budget|forecast|projection|estimate|quotation|proposal|bid|tender|contract|agreement|deal|transaction|exchange|trade|commerce|business|enterprise|corporation|company|firm|partnership|sole proprietorship|llc|inc|corp|ltd|llp|pllc|pc|pa)\s+of\s*[\d,]+(?:\.\d{2})?', r'[FINANCIAL_TERM: \g<0>]'),
         
-        # Penalties and fees
-        (r'(?:late fee|penalty|interest|fine)\s*:?\s*[\d,]+(?:\.\d{2})?', r'[PENALTY: \g<0>]'),
-        (r'(?:late fee|penalty|interest|fine)\s*of\s*[\d,]+(?:\.\d{2})?', r'[PENALTY: \g<0>]'),
+        # Payment terms (enhanced)
+        (r'(?:due|payable|payable on|payment due|installment due|rent due|fee due|tax due|interest due|penalty due|fine due|refund due|deposit due|advance due|commission due|royalty due|rent due|lease due|purchase due|sale due|compensation due|benefits due|allowance due|stipend due|pension due|retirement due|insurance due|premium due|deductible due|coverage due|claim due|settlement due|award due|damages due|restitution due|reimbursement due|subsidy due|grant due|funding due|sponsorship due|endorsement due|licensing due|franchise due|dividend due|share due|stock due|bond due|security due|asset due|liability due|equity due|capital due|fund due|treasury due|budget due|forecast due|projection due|estimate due|quotation due|proposal due|bid due|tender due|contract due|agreement due|deal due|transaction due|exchange due|trade due|commerce due|business due|enterprise due|corporation due|company due|firm due|partnership due|sole proprietorship due|llc due|inc due|corp due|ltd due|llp due|pllc due|pc due|pa due)\s*:?\s*[\d,]+(?:\.\d{2})?', r'[PAYMENT_DUE: \g<0>]'),
+        (r'(?:due|payable|payable on|payment due|installment due|rent due|fee due|tax due|interest due|penalty due|fine due|refund due|deposit due|advance due|commission due|royalty due|rent due|lease due|purchase due|sale due|compensation due|benefits due|allowance due|stipend due|pension due|retirement due|insurance due|premium due|deductible due|coverage due|claim due|settlement due|award due|damages due|restitution due|reimbursement due|subsidy due|grant due|funding due|sponsorship due|endorsement due|licensing due|franchise due|dividend due|share due|stock due|bond due|security due|asset due|liability due|equity due|capital due|fund due|treasury due|budget due|forecast due|projection due|estimate due|quotation due|proposal due|bid due|tender due|contract due|agreement due|deal due|transaction due|exchange due|trade due|commerce due|business due|enterprise due|corporation due|company due|firm due|partnership due|sole proprietorship due|llc due|inc due|corp due|ltd due|llp due|pllc due|pc due|pa due)\s+on\s*[\d,]+(?:\.\d{2})?', r'[PAYMENT_DUE: \g<0>]'),
         
-        # Percentage-based amounts
+        # Penalties and fees (enhanced)
+        (r'(?:late fee|penalty|interest|fine|overdue|default|breach|violation|non-compliance|non-payment|delayed payment|missed payment|skipped payment|partial payment|incomplete payment|insufficient payment|excessive payment|unauthorized payment|fraudulent payment|disputed payment|chargeback|reversal|refund|cancellation|termination|early termination|premature termination|breach of contract|material breach|minor breach|substantial breach|fundamental breach|anticipatory breach|actual breach|constructive breach|repudiatory breach|renunciatory breach|discharge|performance|non-performance|partial performance|defective performance|delayed performance|late performance|early performance|premature performance|excessive performance|insufficient performance|incomplete performance|defective performance|non-conforming performance|conforming performance|satisfactory performance|unsatisfactory performance|defective performance|non-conforming performance|conforming performance|satisfactory performance|unsatisfactory performance)\s*:?\s*[\d,]+(?:\.\d{2})?', r'[PENALTY_FEE: \g<0>]'),
+        (r'(?:late fee|penalty|interest|fine|overdue|default|breach|violation|non-compliance|non-payment|delayed payment|missed payment|skipped payment|partial payment|incomplete payment|insufficient payment|excessive payment|unauthorized payment|fraudulent payment|disputed payment|chargeback|reversal|refund|cancellation|termination|early termination|premature termination|breach of contract|material breach|minor breach|substantial breach|fundamental breach|anticipatory breach|actual breach|constructive breach|repudiatory breach|renunciatory breach|discharge|performance|non-performance|partial performance|defective performance|delayed performance|late performance|early performance|premature performance|excessive performance|insufficient performance|incomplete performance|defective performance|non-conforming performance|conforming performance|satisfactory performance|unsatisfactory performance|defective performance|non-conforming performance|conforming performance|satisfactory performance|unsatisfactory performance)\s+of\s*[\d,]+(?:\.\d{2})?', r'[PENALTY_FEE: \g<0>]'),
+        
+        # Percentage-based amounts (enhanced)
         (r'[\d,]+(?:\.\d{2})?\s*%', r'[PERCENTAGE: \g<0>]'),
-        (r'(?:interest|rate|commission|fee)\s*of\s*[\d,]+(?:\.\d{2})?\s*%', r'[PERCENTAGE: \g<0>]'),
+        (r'(?:interest|rate|commission|fee|discount|markup|margin|profit|loss|tax|vat|gst|service tax|excise|duty|customs|import|export|tariff|quota|subsidy|incentive|rebate|refund|cashback|bonus|penalty|fine|late fee|overdue|default|breach|violation|non-compliance|non-payment|delayed payment|missed payment|skipped payment|partial payment|incomplete payment|insufficient payment|excessive payment|unauthorized payment|fraudulent payment|disputed payment|chargeback|reversal|refund|cancellation|termination|early termination|premature termination|breach of contract|material breach|minor breach|substantial breach|fundamental breach|anticipatory breach|actual breach|constructive breach|repudiatory breach|renunciatory breach|discharge|performance|non-performance|partial performance|defective performance|delayed performance|late performance|early performance|premature performance|excessive performance|insufficient performance|incomplete performance|defective performance|non-conforming performance|conforming performance|satisfactory performance|unsatisfactory performance|defective performance|non-conforming performance|conforming performance|satisfactory performance|unsatisfactory performance)\s+of\s*[\d,]+(?:\.\d{2})?\s*%', r'[PERCENTAGE_TERM: \g<0>]'),
         
-        # Property-specific financial terms
-        (r'(?:down payment|advance payment|security deposit|maintenance|maintenance charges|property tax|registration|stamp duty|brokerage|commission|possession|handover|completion|construction|builder|developer)\s*:?\s*[\d,]+(?:\.\d{2})?', r'[PROPERTY_FINANCIAL: \g<0>]'),
-        (r'(?:down payment|advance payment|security deposit|maintenance|maintenance charges|property tax|registration|stamp duty|brokerage|commission|possession|handover|completion|construction|builder|developer)\s*of\s*[\d,]+(?:\.\d{2})?', r'[PROPERTY_FINANCIAL: \g<0>]'),
+        # Property-specific financial terms (enhanced)
+        (r'(?:down payment|advance payment|security deposit|maintenance|maintenance charges|property tax|registration|stamp duty|brokerage|commission|possession|handover|completion|construction|builder|developer|architect|contractor|subcontractor|supplier|vendor|consultant|advisor|agent|broker|intermediary|middleman|facilitator|coordinator|manager|supervisor|foreman|engineer|technician|specialist|expert|professional|consultant|advisor|agent|broker|intermediary|middleman|facilitator|coordinator|manager|supervisor|foreman|engineer|technician|specialist|expert|professional|consultant|advisor|agent|broker|intermediary|middleman|facilitator|coordinator|manager|supervisor|foreman|engineer|technician|specialist|expert|professional)\s*:?\s*[\d,]+(?:\.\d{2})?', r'[PROPERTY_FINANCIAL: \g<0>]'),
+        (r'(?:down payment|advance payment|security deposit|maintenance|maintenance charges|property tax|registration|stamp duty|brokerage|commission|possession|handover|completion|construction|builder|developer|architect|contractor|subcontractor|supplier|vendor|consultant|advisor|agent|broker|intermediary|middleman|facilitator|coordinator|manager|supervisor|foreman|engineer|technician|specialist|expert|professional|consultant|advisor|agent|broker|intermediary|middleman|facilitator|coordinator|manager|supervisor|foreman|engineer|technician|specialist|expert|professional|consultant|advisor|agent|broker|intermediary|middleman|facilitator|coordinator|manager|supervisor|foreman|engineer|technician|specialist|expert|professional)\s+of\s*[\d,]+(?:\.\d{2})?', r'[PROPERTY_FINANCIAL: \g<0>]'),
         
-        # Payment schedule terms
-        (r'(?:monthly|quarterly|annual|installment|payment schedule|payment plan)\s*:?\s*[\d,]+(?:\.\d{2})?', r'[PAYMENT_SCHEDULE: \g<0>]'),
-        (r'(?:monthly|quarterly|annual|installment|payment schedule|payment plan)\s*of\s*[\d,]+(?:\.\d{2})?', r'[PAYMENT_SCHEDULE: \g<0>]'),
+        # Payment schedule terms (enhanced)
+        (r'(?:monthly|quarterly|annual|installment|payment schedule|payment plan|milestone|stage|phase|period|term|duration|tenure|lease|rental|subscription|membership|license|permit|authorization|approval|clearance|certification|accreditation|qualification|registration|enrollment|admission|acceptance|confirmation|acknowledgment|receipt|delivery|shipment|transport|logistics|warehousing|storage|inventory|stock|supply|procurement|purchasing|sourcing|vendor|supplier|contractor|subcontractor|consultant|advisor|agent|broker|intermediary|middleman|facilitator|coordinator|manager|supervisor|foreman|engineer|technician|specialist|expert|professional)\s*:?\s*[\d,]+(?:\.\d{2})?', r'[PAYMENT_SCHEDULE: \g<0>]'),
+        (r'(?:monthly|quarterly|annual|installment|payment schedule|payment plan|milestone|stage|phase|period|term|duration|tenure|lease|rental|subscription|membership|license|permit|authorization|approval|clearance|certification|accreditation|qualification|registration|enrollment|admission|acceptance|confirmation|acknowledgment|receipt|delivery|shipment|transport|logistics|warehousing|storage|inventory|stock|supply|procurement|purchasing|sourcing|vendor|supplier|contractor|subcontractor|consultant|advisor|agent|broker|intermediary|middleman|facilitator|coordinator|manager|supervisor|foreman|engineer|technician|specialist|expert|professional)\s+of\s*[\d,]+(?:\.\d{2})?', r'[PAYMENT_SCHEDULE: \g<0>]'),
         
-        # Financial sections and clauses
-        (r'(?:payment|financial|cost|fee|charge|amount|total|sum|price|value|worth|budget|expense|revenue|income|salary|wage|bonus|penalty|fine|refund|deposit|advance|installment|interest|tax|commission|royalty|rent|lease|purchase|sale|compensation|benefits|allowance|stipend|pension|retirement|insurance|premium|deductible|coverage|claim|settlement|award|damages|restitution|reimbursement|subsidy|grant|funding|sponsorship|endorsement|licensing|franchise|dividend|share|stock|bond|security|asset|liability|equity|capital|fund|treasury|budget|forecast|projection|estimate|quotation|proposal|bid|tender|contract|agreement|deal|transaction|exchange|trade|commerce|business|enterprise|corporation|company|firm|partnership|sole proprietorship|llc|inc|corp|ltd|llp|pllc|pc|pa)\s+(?:terms?|conditions?|clauses?|provisions?|sections?|articles?|paragraphs?)', r'[FINANCIAL_SECTION: \g<0>]'),
-        
-        # Financial obligations
-        (r'(?:obligation|responsibility|liability|debt|credit|loan|mortgage|investment|profit|loss|earnings|compensation|benefits|allowance|stipend|pension|retirement|insurance|premium|deductible|coverage|claim|settlement|award|damages|restitution|reimbursement|subsidy|grant|funding|sponsorship|endorsement|licensing|franchise|dividend|share|stock|bond|security|asset|liability|equity|capital|fund|treasury|budget|forecast|projection|estimate|quotation|proposal|bid|tender|contract|agreement|deal|transaction|exchange|trade|commerce|business|enterprise|corporation|company|firm|partnership|sole proprietorship|llc|inc|corp|ltd|llp|pllc|pc|pa)\s+(?:obligation|responsibility|liability|debt|credit|loan|mortgage|investment|profit|loss|earnings|compensation|benefits|allowance|stipend|pension|retirement|insurance|premium|deductible|coverage|claim|settlement|award|damages|restitution|reimbursement|subsidy|grant|funding|sponsorship|endorsement|licensing|franchise|dividend|share|stock|bond|security|asset|liability|equity|capital|fund|treasury|budget|forecast|projection|estimate|quotation|proposal|bid|tender|contract|agreement|deal|transaction|exchange|trade|commerce|business|enterprise|corporation|company|firm|partnership|sole proprietorship|llc|inc|corp|ltd|llp|pllc|pc|pa)', r'[FINANCIAL_OBLIGATION: \g<0>]'),
-        
-        # Financial calculations
+        # Financial calculations (enhanced)
         (r'(?:total|sum|subtotal|grand total|final amount|final cost|final price|final value|final worth|final budget|final expense|final revenue|final income|final salary|final wage|final bonus|final penalty|final fine|final refund|final deposit|final advance|final installment|final interest|final tax|final commission|final royalty|final rent|final lease|final purchase|final sale|final compensation|final benefits|final allowance|final stipend|final pension|final retirement|final insurance|final premium|final deductible|final coverage|final claim|final settlement|final award|final damages|final restitution|final reimbursement|final subsidy|final grant|final funding|final sponsorship|final endorsement|final licensing|final franchise|final dividend|final share|final stock|final bond|final security|final asset|final liability|final equity|final capital|final fund|final treasury|final budget|final forecast|final projection|final estimate|final quotation|final proposal|final bid|final tender|final contract|final agreement|final deal|final transaction|final exchange|final trade|final commerce|final business|final enterprise|final corporation|final company|final firm|final partnership|final sole proprietorship|final llc|final inc|final corp|final ltd|final llp|final pllc|final pc|final pa)\s+(?:is|equals?|=\s*)?\s*[\d,]+(?:\.\d{2})?', r'[CALCULATION: \g<0>]'),
+        
+        # Enhanced amount patterns for better detection
+        (r'[\d,]+(?:\.\d{2})?\s*(?:per|each|per unit|per item|per hour|per day|per week|per month|per year|per annum|per sq\.?ft|per sq\.?m|per acre|per hectare|per kg|per lb|per ton|per tonne|per liter|per gallon|per piece|per unit|per service|per visit|per call|per transaction|per order|per shipment|per delivery|per installation|per setup|per configuration|per customization|per integration|per migration|per upgrade|per maintenance|per support|per training|per consultation|per advice|per recommendation|per suggestion|per proposal|per plan|per strategy|per solution|per implementation|per execution|per completion|per delivery|per handover|per transfer|per assignment|per project|per task|per job|per work|per service|per product|per item|per unit|per piece|per lot|per batch|per shipment|per delivery|per installation|per setup|per configuration|per customization|per integration|per migration|per upgrade|per maintenance|per support|per training|per consultation|per advice|per recommendation|per suggestion|per proposal|per plan|per strategy|per solution|per implementation|per execution|per completion|per delivery|per handover|per transfer|per assignment|per project|per task|per job|per work|per service|per product|per item|per unit|per piece|per lot|per batch)', r'[UNIT_AMOUNT: \g<0>]'),
     ]
     
     enhanced_text = text
