@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Background document processing script
-This script handles heavy processing like embeddings and AI summaries
+This script handles heavy processing like embeddings and AI summaries using Gemini
 """
 
 import sys
@@ -100,7 +100,7 @@ async def process_document_background(document_id: int):
                 summary=summary_result["summary"],
                 structured_data=summary_result["structured"],
                 confidence_score=0.8,
-                model_used="groq-llama3-8b-8192"
+                model_used="gemini-2.5-flash"
             )
             db.add(summary_analysis)
             db.commit()

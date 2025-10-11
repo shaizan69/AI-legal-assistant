@@ -42,11 +42,11 @@ def _get_or_create_free_user(db: Session) -> User:
 
 
 def _extract_payment_schedule_table(chunks_text: List[str]) -> str:
-    """Build a normalized payment schedule table from chunk texts with FINANCIAL markers.
+    """Build a normalized payment schedule from chunk texts with FINANCIAL markers.
 
     Expected lines like:
       "On Booking Rs.[[FINANCIAL: AMOUNT: 1020000] /-]"
-    Returns a markdown table with Sr., Stage, Amount.
+    Returns a plain text format with numbered stages and amounts.
     """
     combined = "\n".join(chunks_text)
     lines = [ln.strip() for ln in combined.splitlines() if 'FINANCIAL: AMOUNT' in ln]
@@ -79,17 +79,16 @@ def _extract_payment_schedule_table(chunks_text: List[str]) -> str:
     if not rows:
         return ""
 
-    # Build markdown table
+    # Build plain text format
     table_lines = [
-        "| Sr. | Stage | Amount (INR) |",
-        "| --- | ------ | ------------- |",
+        "Payment Schedule:",
     ]
     for idx, (stage, amount) in enumerate(rows, 1):
         display_amt = f"{amount}/-" if amount else ""
-        table_lines.append(f"| {idx} | {stage} | {display_amt} |")
+        table_lines.append(f"{idx}. {stage}: {display_amt}")
 
     if total_amount > 0:
-        table_lines.append(f"|  | Total (computed) | {total_amount:,}/- |")
+        table_lines.append(f"Total Amount: {total_amount:,}/-")
 
     return "\n".join(table_lines)
 
@@ -231,7 +230,7 @@ async def free_ask(payload: dict, db: Session = Depends(get_db)):
                 context_parts = []
                 for ch in all_chunks:  # Get ALL chunks, not just first 10
                     if ch.content:
-                        context_parts.append(f"[Chunk {ch.chunk_index}]: {ch.content}")
+                        context_parts.append(f"{ch.content}")
                 context = "\n\n".join(context_parts)
                 logger.info(f"Fallback context: {len(context)} characters from {len(all_chunks)} chunks")
             else:
@@ -249,7 +248,7 @@ async def free_ask(payload: dict, db: Session = Depends(get_db)):
                 context_parts = []
                 for ch in all_chunks:
                     if ch.content:
-                        context_parts.append(f"[Chunk {ch.chunk_index}]: {ch.content}")
+                        context_parts.append(f"{ch.content}")
                 context = "\n\n".join(context_parts)
                 logger.info(f"Extended context: {len(context)} characters from {len(all_chunks)} chunks")
         
@@ -500,7 +499,7 @@ async def find_relevant_context(question: str, document_id: int, db: Session) ->
                     re.search(r'(?:total|sum|amount|cost|price|fee|charge)\s*:?\s*[\d,]+', content.lower()) or  # Financial terms
                     re.search(r'[\d,]+(?:\.\d{2})?\s*(?:total|sum|amount|cost|price|fee|charge)', content.lower())):  # Amounts with financial terms
                     amount_chunks.append(chunk)
-                    logger.info(f"Found amount in chunk {chunk.chunk_index}: {content[:100]}...")
+                    logger.info(f"Found amount in content: {content[:100]}...")
             
             # Also search for chunks containing financial terms
             financial_chunks = db.query(DocumentChunk).filter(
@@ -644,7 +643,7 @@ async def find_relevant_context(question: str, document_id: int, db: Session) ->
             # Add amount chunks (highest priority)
             logger.info(f"Found {len(amount_chunks)} chunks with amounts for document {document_id}")
             for chunk in amount_chunks:
-                logger.info(f"Amount chunk {chunk.chunk_index}: {chunk.content[:100]}...")
+                logger.info(f"Amount content: {chunk.content[:100]}...")
                 candidate_indices.add(chunk.chunk_index)
                 # Include more surrounding context for amount chunks
                 candidate_indices.update([chunk.chunk_index - 2, chunk.chunk_index - 1, chunk.chunk_index + 1, chunk.chunk_index + 2])
@@ -735,7 +734,7 @@ async def find_relevant_context(question: str, document_id: int, db: Session) ->
             if total_len >= max_context_length:
                 logger.info(f"Context length limit reached at {total_len} characters")
                 break
-            context_parts.append(f"[Chunk {ch.chunk_index}]: {ch.content}")
+            context_parts.append(f"{ch.content}")
             total_len += len(ch.content)
         
         context = "\n\n".join(context_parts)

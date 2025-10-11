@@ -1,78 +1,68 @@
 """
-Groq LLM Service for Legal Document Analysis using groq/compound
+Gemini LLM Service for Legal Document Analysis using gemini-2.5-flash
 """
 
 import asyncio
 import logging
 from typing import List, Dict, Optional
-import requests
-import json
+import google.generativeai as genai
 from datetime import datetime
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-class GroqLLMService:
-    """Service for interacting with Groq API using groq/compound"""
+class GeminiLLMService:
+    """Service for interacting with Gemini API using gemini-2.5-flash"""
     
     def __init__(self):
-        self.api_key = settings.GROQ_API_KEY
-        # Force model to groq/compound (overrides any env/os value)
-        self.model = "groq/compound"
-        # Default to official Groq OpenAI-compatible endpoint if not provided
-        self.base_url = settings.GROQ_BASE_URL or "https://api.groq.com/openai/v1"
-        self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
+        self.api_key = settings.GEMINI_API_KEY
+        self.model_name = settings.GEMINI_MODEL
         
-        logger.info(f"Groq LLM service initialized with model: {self.model}")
-        logger.info(f"Groq API Key (first 10 chars): {self.api_key[:10]}...")
-        logger.info(f"Groq Base URL: {self.base_url}")
+        if not self.api_key:
+            raise ValueError("GEMINI_API_KEY is required")
+        
+        # Configure Gemini
+        genai.configure(api_key=self.api_key)
+        
+        # Initialize the model
+        self.model = genai.GenerativeModel(self.model_name)
+        
+        logger.info(f"Gemini LLM service initialized with model: {self.model_name}")
+        logger.info(f"Gemini API Key (first 10 chars): {self.api_key[:10]}...")
     
     async def generate_text(self, prompt: str, max_tokens: int = 1000, temperature: float = 0.7) -> str:
-        """Generate text using Groq API"""
+        """Generate text using Gemini API"""
         try:
-            messages = [
-                {"role": "user", "content": prompt}
-            ]
-            
-            payload = {
-                "model": self.model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "top_p": 0.9,
-                "stream": False
-            }
-            
-            response = requests.post(
-                f"{self.base_url}/chat/completions",
-                headers=self.headers,
-                json=payload,
-                timeout=60
+            # Configure generation parameters
+            generation_config = genai.types.GenerationConfig(
+                max_output_tokens=max_tokens,
+                temperature=temperature,
+                top_p=0.9,
+                top_k=40
             )
             
-            if response.status_code != 200:
-                logger.error(f"Groq API error: {response.status_code} - {response.text}")
-                raise Exception(f"Groq API error: {response.status_code}")
+            # Generate content
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.model.generate_content(
+                    prompt,
+                    generation_config=generation_config
+                )
+            )
             
-            result = response.json()
-            return result['choices'][0]['message']['content'].strip()
+            if response.text:
+                return response.text.strip()
+            else:
+                logger.warning("Empty response from Gemini")
+                return "No response generated"
             
-        except requests.exceptions.Timeout:
-            logger.error("Groq API request timed out")
-            raise Exception("Groq API request timed out")
-        except requests.exceptions.ConnectionError:
-            logger.error("Cannot connect to Groq API")
-            raise Exception("Groq API service is not available")
         except Exception as e:
-            logger.error(f"Error generating text with Groq: {e}")
-            raise
+            logger.error(f"Error generating text with Gemini: {e}")
+            raise Exception(f"Failed to generate text: {e}")
     
     async def answer_question(self, question: str, context: str) -> Dict[str, str]:
-        """Answer a question based on context using Groq with enhanced money-related query handling"""
+        """Answer a question based on context using Gemini with enhanced money-related query handling"""
         try:
             prompt = f"""You are an expert legal AI assistant with specialized knowledge in financial and monetary analysis. Your task is to provide accurate, precise, and helpful answers based on the provided legal document context.
 
@@ -100,7 +90,7 @@ When users ask about money, costs, payments, fees, or financial terms, you shoul
   * TABLES FOUND: Structured tabular data with headers and rows
   * CALCULATIONS FOUND: Mathematical calculations and totals
 - ALWAYS prioritize information from the financial analysis section over narrative text
-- Cross-reference analysis data with chunk content for complete understanding
+- Cross-reference analysis data with document content for complete understanding
 
 **AMOUNT IDENTIFICATION & CONTEXT LEARNING:**
 - Identify ALL monetary values, fees, costs, payments, and financial obligations
@@ -151,17 +141,11 @@ When users ask about money, costs, payments, fees, or financial terms, you shoul
 - Use this learned context to provide comprehensive answers
 - If amounts are at the end of documents, pay special attention to summary sections
 
-**TABULAR FORMAT REQUIREMENTS:**
-- If monetary information is presented in a table format in the document, present your answer in a similar tabular format
-- Use markdown tables with proper headers and alignment
-- Preserve the structure and relationships shown in the original table
-- Include all relevant columns (description, quantity, unit rate, amount, etc.)
-- Use consistent formatting for amounts (e.g., 187,450/-, 749,800/-)
-- If the document has a pricing table, quote table, or financial breakdown table, replicate that structure in your response
-- **TABLE DATA EXTRACTION**: When you see "TABLE DATA:" in the context, treat it as structured tabular information
+**DATA EXTRACTION REQUIREMENTS:**
 - Extract specific values from tables and reference them accurately
-- If asked about table contents, provide detailed breakdown of all relevant rows and columns
-- Calculate totals, subtotals, and percentages from table data when relevant
+- If asked about table contents, provide detailed breakdown of all relevant information
+- Calculate totals, subtotals, and percentages from data when relevant
+- Present information in clear, readable format without markdown tables
 
 **STRUCTURED DATA PROCESSING:**
 - When you see "TABLES FOUND" in the financial analysis, use this structured data
@@ -185,18 +169,19 @@ CRITICAL REMINDER:
 IF CONTEXT CONTAINS A SECTION STARTING WITH "=== COMPREHENSIVE FINANCIAL ANALYSIS ===":
 - This is your PRIMARY source for financial information
 - Use the pre-extracted amounts, schedules, terms, tables, and calculations
-- Cross-reference with chunk content for complete understanding
+- Cross-reference with document content for complete understanding
 - Provide answers based on this structured analysis
 
 IF CONTEXT CONTAINS A SECTION STARTING WITH "TABLE DATA:":
 - Treat it as authoritative structured data for answering table/schedule questions
-- Prioritize extracting directly from this table before reading narrative text
-- For payment schedule questions, return a concise markdown table of stages and amounts, followed by a one-line total
+- Prioritize extracting directly from this data before reading narrative text
+- For payment schedule questions, provide a clear breakdown of stages and amounts in paragraph format
 
 RESPONSE GUIDELINES:
 - Start with a direct answer if possible
 - For money-related questions, provide specific figures, calculations, and currencies
 - Cite specific document sections (e.g., "According to Section 3.2...")
+- **DO NOT mention chunk numbers or references to specific chunks**
 - If multiple sections are relevant, organize by topic
 - **COMPREHENSIVE FINANCIAL ANALYSIS REQUIREMENTS:**
   * Use the financial analysis section as your primary source
@@ -212,12 +197,11 @@ RESPONSE GUIDELINES:
   * Any hidden or additional costs with their conditions
   * Relevant calculations or formulas with their basis
   * Context about when and why each amount applies
-- Use clear formatting for financial information (bullet points, tables when appropriate)
-- **TABULAR FORMATTING**: When monetary information is in table format in the document, present your answer in a markdown table with:
-  * Proper headers (Description, Qty, Unit Rate, Amount, etc.)
-  * Aligned columns for easy reading
+- Use clear formatting for financial information (bullet points, numbered lists when appropriate)
+- **CLEAR FORMATTING**: When monetary information is structured in the document, present your answer in clear, readable format with:
+  * Bullet points or numbered lists for easy reading
   * Consistent amount formatting (e.g., 187,450/-, 749,800/-)
-  * All relevant data from the original table
+  * All relevant data from the original information
 - **STRUCTURED ANALYSIS APPROACH**: Demonstrate that you understand the comprehensive financial analysis
 - **NEVER GIVE GENERIC RESPONSES**: Always analyze the actual context provided above
 - End with "If you need clarification on any specific aspect, please let me know."
@@ -228,8 +212,8 @@ ANSWER:"""
             
             return {
                 "answer": answer,
-                "confidence": 0.9,  # Higher confidence with improved prompting
-                "model_used": self.model,
+                "confidence": 0.9,  # High confidence with Gemini
+                "model_used": self.model_name,
                 "timestamp": datetime.utcnow().isoformat()
             }
             
@@ -238,10 +222,10 @@ ANSWER:"""
             raise Exception(f"Failed to answer question: {e}")
     
     async def summarize_document(self, text: str, document_type: str = "legal") -> Dict[str, str]:
-        """Summarize a legal document using Groq"""
+        """Summarize a legal document using Gemini"""
         try:
-            # Truncate text if too long (Groq has token limits)
-            max_chars = 8000  # Conservative limit for Groq
+            # Truncate text if too long (Gemini has token limits)
+            max_chars = 100000  # Gemini can handle more text
             if len(text) > max_chars:
                 text = text[:max_chars] + "..."
             
@@ -252,15 +236,15 @@ Document:
 
 Summary:"""
             
-            summary = await self.generate_text(prompt, max_tokens=300, temperature=0.3)
+            summary = await self.generate_text(prompt, max_tokens=500, temperature=0.3)
             
             return {
                 "summary": summary,
                 "structured": {},
                 "document_type": document_type,
                 "analysis_date": datetime.utcnow().isoformat(),
-                "model_used": self.model,
-                "confidence": 0.8  # Default confidence for Groq
+                "model_used": self.model_name,
+                "confidence": 0.8
             }
             
         except Exception as e:
@@ -268,10 +252,10 @@ Summary:"""
             raise Exception(f"Failed to summarize document: {e}")
     
     async def detect_risks(self, text: str, document_type: str = "legal") -> Dict[str, str]:
-        """Detect risks in a legal document using Groq with comprehensive legal risk analysis"""
+        """Detect risks in a legal document using Gemini with comprehensive legal risk analysis"""
         try:
             # Truncate text if too long
-            max_chars = 8000  # Increased limit for better analysis
+            max_chars = 100000  # Gemini can handle more text
             if len(text) > max_chars:
                 text = text[:max_chars] + "..."
             
@@ -343,8 +327,8 @@ RISK ANALYSIS:"""
                 "recommendations": ["Review with legal expert"],
                 "document_type": document_type,
                 "analysis_date": datetime.utcnow().isoformat(),
-                "model_used": self.model,
-                "confidence": 0.9  # Higher confidence with improved prompting
+                "model_used": self.model_name,
+                "confidence": 0.9
             }
             
         except Exception as e:
@@ -352,10 +336,10 @@ RISK ANALYSIS:"""
             raise Exception(f"Failed to detect risks: {e}")
     
     async def compare_documents(self, doc1: str, doc2: str) -> Dict[str, str]:
-        """Compare two legal documents using Groq"""
+        """Compare two legal documents using Gemini"""
         try:
             # Truncate documents if too long
-            max_chars = 4000  # Conservative limit for Groq
+            max_chars = 50000  # Gemini can handle more text
             if len(doc1) > max_chars:
                 doc1 = doc1[:max_chars] + "..."
             if len(doc2) > max_chars:
@@ -371,7 +355,7 @@ Document 2:
 
 Comparison Analysis:"""
             
-            comparison = await self.generate_text(prompt, max_tokens=400, temperature=0.3)
+            comparison = await self.generate_text(prompt, max_tokens=600, temperature=0.3)
             
             return {
                 "comparison": comparison,
@@ -379,8 +363,8 @@ Comparison Analysis:"""
                 "similarities": [],
                 "recommendations": [],
                 "analysis_date": datetime.utcnow().isoformat(),
-                "model_used": self.model,
-                "confidence": 0.8  # Default confidence for Groq
+                "model_used": self.model_name,
+                "confidence": 0.8
             }
             
         except Exception as e:
@@ -388,29 +372,18 @@ Comparison Analysis:"""
             raise Exception(f"Failed to compare documents: {e}")
     
     def test_connection(self) -> bool:
-        """Test connection to Groq API"""
+        """Test connection to Gemini API"""
         try:
-            payload = {
-                "model": self.model,
-                "messages": [{"role": "user", "content": "Test connection"}],
-                "max_tokens": 10,
-                "temperature": 0.1
-            }
+            # Simple test generation
+            test_response = self.model.generate_content("Test connection")
             
-            response = requests.post(
-                f"{self.base_url}/chat/completions",
-                headers=self.headers,
-                json=payload,
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                logger.info("✅ Groq API connection successful")
+            if test_response.text:
+                logger.info("✅ Gemini API connection successful")
                 return True
             else:
-                logger.error(f"❌ Groq API connection failed: {response.status_code}")
+                logger.error("❌ Gemini API connection failed: No response")
                 return False
                 
         except Exception as e:
-            logger.error(f"❌ Groq API connection error: {e}")
+            logger.error(f"❌ Gemini API connection error: {e}")
             return False

@@ -639,16 +639,21 @@ def format_table_for_chunking(table: Dict[str, Any]) -> str:
     # Add table header
     headers = table["headers"]
     formatted_lines.append("TABLE DATA:")
-    formatted_lines.append("| " + " | ".join(headers) + " |")
-    formatted_lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
+    formatted_lines.append("Headers: " + ", ".join(headers))
     
     # Add table rows
     for row in table["rows"]:
         row_data = row["data"]
-        # Pad row data to match header length
+        # Pad row_data to match header length
         while len(row_data) < len(headers):
             row_data.append("")
-        formatted_lines.append("| " + " | ".join(row_data) + " |")
+        
+        # Format as key-value pairs
+        row_items = []
+        for i, header in enumerate(headers):
+            if i < len(row_data) and row_data[i]:
+                row_items.append(f"{header}: {row_data[i]}")
+        formatted_lines.append("Row: " + ", ".join(row_items))
     
     return "\n".join(formatted_lines)
 

@@ -1,5 +1,5 @@
 """
-Large Language Model wrapper and utilities using Groq API (groq/compound)
+Large Language Model wrapper and utilities using Gemini API (gemini-2.5-flash)
 """
 
 import logging
@@ -7,37 +7,37 @@ import re
 from datetime import datetime
 from typing import List, Dict, Any
 
-from app.core.groq_llm import GroqLLMService
+from app.core.gemini_llm import GeminiLLMService
 
 logger = logging.getLogger(__name__)
 
 
 class LLMService:
-    """Service for interacting with Large Language Models via Groq API (groq/compound)"""
+    """Service for interacting with Large Language Models via Gemini API (gemini-2.5-flash)"""
     
     def __init__(self):
-        # Use Groq service as primary and only provider
-        self.groq_service = GroqLLMService()
+        # Use Gemini service as primary and only provider
+        self.gemini_service = GeminiLLMService()
     
     async def generate_text(self, prompt: str, max_tokens: int = 1000, temperature: float = 0.7) -> str:
-        """Generate text using the Groq LLM"""
-        return await self.groq_service.generate_text(prompt, max_tokens, temperature)
+        """Generate text using the Gemini LLM"""
+        return await self.gemini_service.generate_text(prompt, max_tokens, temperature)
     
     async def summarize_document(self, text: str, document_type: str = "contract") -> Dict[str, Any]:
-        """Summarize a legal document using Groq groq/compound"""
-        return await self.groq_service.summarize_document(text, document_type)
+        """Summarize a legal document using Gemini gemini-2.5-flash"""
+        return await self.gemini_service.summarize_document(text, document_type)
     
     async def detect_risks(self, text: str, document_type: str = "contract") -> Dict[str, Any]:
-        """Detect potential risks in a legal document using Groq groq/compound"""
-        return await self.groq_service.detect_risks(text, document_type)
+        """Detect potential risks in a legal document using Gemini gemini-2.5-flash"""
+        return await self.gemini_service.detect_risks(text, document_type)
     
     async def compare_documents(self, doc1_text: str, doc2_text: str, doc1_type: str = "contract", doc2_type: str = "contract") -> Dict[str, Any]:
-        """Compare two legal documents using Groq groq/compound"""
-        return await self.groq_service.compare_documents(doc1_text, doc2_text)
+        """Compare two legal documents using Gemini gemini-2.5-flash"""
+        return await self.gemini_service.compare_documents(doc1_text, doc2_text)
     
     async def answer_question(self, question: str, context: str) -> Dict[str, Any]:
-        """Answer a question about a legal document using Groq groq/compound"""
-        return await self.groq_service.answer_question(question, context)
+        """Answer a question about a legal document using Gemini gemini-2.5-flash"""
+        return await self.gemini_service.answer_question(question, context)
     
     
     def _extract_structured_data(self, text: str) -> Dict[str, Any]:
