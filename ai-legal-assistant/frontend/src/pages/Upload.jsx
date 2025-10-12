@@ -404,7 +404,7 @@ const Upload = () => {
         {/* Actions */}
         <div className="upload-actions">
           <button
-            onClick={() => navigate('/')}
+            onClick={() => navigate('/documents')}
             className="btn btn-outline"
           >
             Back to Documents
@@ -412,7 +412,7 @@ const Upload = () => {
           
           {uploadedFiles.length > 0 && (
             <button
-              onClick={() => navigate('/')}
+              onClick={() => navigate('/documents')}
               className="btn btn-primary"
             >
               View Documents

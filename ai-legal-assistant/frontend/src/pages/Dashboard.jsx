@@ -8,7 +8,6 @@ import {
   GitCompare, 
   AlertTriangle,
   TrendingUp,
-  Clock,
   CheckCircle
 } from 'lucide-react';
 import { documentsAPI } from '../api/documents';
@@ -16,14 +15,6 @@ import { qaAPI } from '../api/qa';
 import './Dashboard.css';
 
 const Dashboard = () => {
-  // Helper function to format file size
-  const formatFileSize = (bytes) => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
 
   // Fetch documents
   const { data: documentsData, isLoading: documentsLoading } = useQuery(
@@ -166,7 +157,7 @@ const Dashboard = () => {
         <div className="dashboard-section">
           <div className="section-header">
             <h2 className="section-title">Recent Documents</h2>
-            <Link to="/" className="section-link">
+            <Link to="/documents" className="section-link">
               View All
             </Link>
           </div>

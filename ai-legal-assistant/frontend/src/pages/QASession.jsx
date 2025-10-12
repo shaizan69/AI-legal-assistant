@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { Send, Bot, User, Loader2, Copy, Check } from 'lucide-react';
+import { Send, Bot, User, Loader2, Copy, Check, MessageSquare, Search } from 'lucide-react';
 import { qaAPI } from '../api/qa';
 import './QASession.css';
 
@@ -10,6 +10,7 @@ const QASession = () => {
   const [messages, setMessages] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
 
@@ -48,21 +49,6 @@ const QASession = () => {
         }
       }
     })();
-  }, [sessionId]);
-
-  // Cleanup session when component unmounts
-  useEffect(() => {
-    return () => {
-      // Clean up session and document when user navigates away
-      if (sessionId) {
-        // Add a small delay to ensure any pending operations complete
-        setTimeout(() => {
-          qaAPI.cleanupSession(Number(sessionId)).catch(error => {
-            console.warn('Failed to cleanup session:', error);
-          });
-        }, 100);
-      }
-    };
   }, [sessionId]);
 
   const handleSubmit = async (e) => {
@@ -153,16 +139,6 @@ const QASession = () => {
     }
   };
 
-  const handleCleanup = async () => {
-    try {
-      await qaAPI.cleanupSession(Number(sessionId));
-      alert('Session cleaned up successfully!');
-    } catch (error) {
-      console.error('Cleanup failed:', error);
-      alert('Cleanup failed. Please try again.');
-    }
-  };
-
   const copyToClipboard = async (content, messageId) => {
     try {
       await navigator.clipboard.writeText(content);
@@ -177,132 +153,144 @@ const QASession = () => {
     return timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
+  const handleSearch = (e) => {
+    setSearchTerm(e.target.value);
+  };
+
+  // Filter messages based on search term
+  const filteredMessages = messages.filter(message => 
+    message.content.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
   return (
-    <div className="chat-container">
-      {/* Header */}
-      <div className="chat-header">
-        <div className="chat-header-content">
-          <div className="chat-title-section">
-            <h1 className="chat-title">Document Q&A</h1>
-            <p className="chat-subtitle">Ask questions about your document</p>
-          </div>
-          <div className="chat-actions">
-            <button 
-              className="cleanup-button"
-              onClick={handleCleanup}
-              title="Clean up session and document"
-            >
-              Clean Up
-            </button>
+    <div className="home">
+      {/* Header matching Home page exactly */}
+      <div className="home-header">
+        <h1 className="home-title">Document Q&A</h1>
+        <div className="home-actions">
+          <div className="model-badge">
+            <MessageSquare size={20} />
+            Powered by Gemini 2.5 Flash
           </div>
         </div>
       </div>
 
+      {/* Search bar matching Home page */}
+      <div className="search-filters">
+        <div className="search-bar">
+          <Search size={20} className="search-icon" />
+          <input
+            type="text"
+            placeholder="Search conversation..."
+            value={searchTerm}
+            onChange={handleSearch}
+            className="search-input"
+          />
+        </div>
+      </div>
+
       {/* Messages Area */}
-      <div className="chat-messages">
+      <div className="documents-table">
         {messages.length === 0 ? (
-          <div className="empty-chat">
-            <div className="empty-chat-content">
-              <div className="empty-chat-icon">
-                <Bot size={48} />
-              </div>
-              <h3 className="empty-chat-title">Start a conversation</h3>
-              <p className="empty-chat-description">
-                Ask questions about your document to get AI-powered insights and analysis.
-              </p>
-              <div className="suggested-questions">
-                <p className="suggested-title">Try asking:</p>
-                <div className="suggestion-chips">
-                  <button 
-                    className="suggestion-chip"
-                    onClick={() => setQuestion("What are the main points of this document?")}
-                  >
-                    What are the main points of this document?
-                  </button>
-                  <button 
-                    className="suggestion-chip"
-                    onClick={() => setQuestion("Are there any risks or concerns mentioned?")}
-                  >
-                    Are there any risks or concerns mentioned?
-                  </button>
-                  <button 
-                    className="suggestion-chip"
-                    onClick={() => setQuestion("Can you summarize the key terms?")}
-                  >
-                    Can you summarize the key terms?
-                  </button>
-                </div>
+          <div className="empty-state">
+            <div className="empty-icon">
+              <Bot size={48} />
+            </div>
+            <h3 className="empty-title">Start a conversation</h3>
+            <p className="empty-description">
+              Ask questions about your document to get AI-powered insights and analysis powered by Gemini 2.5 Flash.
+            </p>
+            <div className="suggestions">
+              <p className="suggestions-title">Try asking:</p>
+              <div className="suggestion-chips">
+                <button 
+                  className="suggestion-chip"
+                  onClick={() => setQuestion("What are the main points of this document?")}
+                >
+                  What are the main points of this document?
+                </button>
+                <button 
+                  className="suggestion-chip"
+                  onClick={() => setQuestion("Are there any risks or concerns mentioned?")}
+                >
+                  Are there any risks or concerns mentioned?
+                </button>
+                <button 
+                  className="suggestion-chip"
+                  onClick={() => setQuestion("Can you summarize the key terms?")}
+                >
+                  Can you summarize the key terms?
+                </button>
               </div>
             </div>
           </div>
         ) : (
           <div className="messages-list">
-            {messages.map((message) => (
-              <div key={message.id} className={`message-wrapper ${message.type}`}>
-                <div className="message">
-                  <div className="message-avatar">
-                    {message.type === 'user' ? (
-                      <div className="user-avatar">
-                        <User size={16} />
-                      </div>
-                    ) : (
-                      <div className="ai-avatar">
-                        <Bot size={16} />
-                      </div>
-                    )}
-                  </div>
-                  <div className="message-content">
-                    <div className="message-header">
-                      <span className="message-sender">
-                        {message.type === 'user' ? 'You' : 'AI Assistant'}
-                      </span>
-                      <span className="message-time">
-                        {formatTime(message.timestamp)}
-                      </span>
+            {filteredMessages.map((message) => (
+              <div key={message.id} className={`message-row ${message.type}`}>
+                <div className="message-avatar">
+                  {message.type === 'user' ? (
+                    <div className="user-avatar">
+                      <User size={16} />
                     </div>
-                    <div className={`message-text ${message.isError ? 'error-message' : ''}`}>
-                      {message.content}
+                  ) : (
+                    <div className="ai-avatar">
+                      <Bot size={16} />
                     </div>
-                    {message.type === 'ai' && (
-                      <div className="message-actions">
-                        <button
-                          className="action-button"
-                          onClick={() => copyToClipboard(message.content, message.id)}
-                          title="Copy message"
-                        >
-                          {copiedMessageId === message.id ? (
-                            <Check size={14} />
-                          ) : (
-                            <Copy size={14} />
-                          )}
-                        </button>
-                      </div>
-                    )}
+                  )}
+                </div>
+                <div className="message-content">
+                  <div className="message-header">
+                    <span className="message-sender">
+                      {message.type === 'user' ? 'You' : 'Gemini AI'}
+                    </span>
+                    <span className="message-time">
+                      {formatTime(message.timestamp)}
+                    </span>
                   </div>
+                  <div className={`message-text ${message.isError ? 'error-message' : ''}`}>
+                    {message.content}
+                  </div>
+                  {message.type === 'ai' && (
+                    <div className="message-actions">
+                      <button
+                        className="action-button"
+                        onClick={() => copyToClipboard(message.content, message.id)}
+                        title="Copy message"
+                      >
+                        {copiedMessageId === message.id ? (
+                          <Check size={14} />
+                        ) : (
+                          <Copy size={14} />
+                        )}
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
             
             {/* Loading indicator */}
             {isLoading && (
-              <div className="message-wrapper ai">
-                <div className="message">
-                  <div className="message-avatar">
-                    <div className="ai-avatar">
-                      <Bot size={16} />
+              <div className="message-row ai">
+                <div className="message-avatar">
+                  <div className="ai-avatar">
+                    <Bot size={16} />
+                  </div>
+                </div>
+                <div className="message-content">
+                  <div className="message-header">
+                    <span className="message-sender">Gemini AI</span>
+                  </div>
+                  <div className="typing-indicator">
+                    <div className="typing-dots">
+                      <span></span>
+                      <span></span>
+                      <span></span>
                     </div>
                   </div>
-                  <div className="message-content">
-                    <div className="message-header">
-                      <span className="message-sender">AI Assistant</span>
-                    </div>
-                    <div className="typing-indicator">
-                      <div className="typing-dots">
-                        <span></span>
-                        <span></span>
-                        <span></span>
-                      </div>
-                    </div>
+                  <div className="message-meta">
+                    <span className="model-badge">Powered by Gemini 2.5 Flash</span>
                   </div>
                 </div>
               </div>
@@ -314,8 +302,8 @@ const QASession = () => {
       </div>
 
       {/* Input Area */}
-      <div className="chat-input-container">
-        <form className="chat-input-form" onSubmit={handleSubmit}>
+      <div className="input-container">
+        <form className="input-form" onSubmit={handleSubmit}>
           <div className="input-wrapper">
             <textarea
               ref={textareaRef}

@@ -30,6 +30,11 @@ export const freeAPI = {
   deleteSession: async (sessionId) => {
     return api.delete(`/api/free/sessions/${sessionId}`);
   },
+
+  // End session (alias for deleteSession for compatibility)
+  endSession: async (sessionId) => {
+    return api.delete(`/api/free/sessions/${sessionId}`);
+  },
 };
 
 export default freeAPI;

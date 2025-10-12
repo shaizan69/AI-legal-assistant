@@ -8,7 +8,7 @@ import 'react-toastify/dist/ReactToastify.css';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
-// import Home from './pages/Home';
+import Home from './pages/Home';
 import LandingChat from './pages/LandingChat';
 import Dashboard from './pages/Dashboard';
 import DocumentView from './pages/DocumentView';
@@ -103,6 +103,16 @@ function App() {
                   <ProtectedRoute>
                     <Layout>
                       <Dashboard />
+                    </Layout>
+                  </ProtectedRoute>
+                } 
+              />
+              <Route 
+                path="/documents" 
+                element={
+                  <ProtectedRoute>
+                    <Layout>
+                      <Home />
                     </Layout>
                   </ProtectedRoute>
                 } 
