@@ -1,9 +1,16 @@
 import axios from 'axios';
 
+// Use Supabase Edge Functions as backend
+const API_BASE_URL = process.env.REACT_APP_SUPABASE_URL + '/functions/v1/api';
+
 // Create axios instance
 const api = axios.create({
-  baseURL: process.env.REACT_APP_API_URL || 'http://localhost:8000',
+  baseURL: API_BASE_URL,
   timeout: 30000,
+  headers: {
+    'apikey': process.env.REACT_APP_SUPABASE_ANON_KEY,
+    'Content-Type': 'application/json',
+  }
 });
 
 // Request interceptor to add auth token

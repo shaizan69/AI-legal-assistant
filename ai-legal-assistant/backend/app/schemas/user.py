@@ -26,6 +26,9 @@ class UserCreate(UserBase):
     def validate_password(cls, v):
         if len(v) < 8:
             raise ValueError('Password must be at least 8 characters long')
+        # bcrypt has a 72-byte limit, so truncate if necessary
+        if len(v.encode('utf-8')) > 72:
+            v = v[:72]
         return v
     
     @validator('username')

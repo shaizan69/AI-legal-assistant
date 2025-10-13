@@ -87,7 +87,8 @@
 }
 
 .sidebar-minimized .sidebar-controls {
-  display: none;
+  display: flex;
+  justify-content: center;
 }
 
 .sidebar-minimize-btn {

@@ -32,7 +32,7 @@ const Layout = ({ children }) => {
     { name: 'Dashboard', href: '/dashboard', icon: BarChart3 },
     { name: 'Documents', href: '/documents', icon: FileText },
     { name: 'Upload', href: '/upload', icon: Upload },
-    { name: 'Q&A Sessions', href: '/qa', icon: MessageSquare },
+    { name: 'LawgicAI', href: '/qa', icon: MessageSquare },
     { name: 'Compare', href: '/compare', icon: GitCompare },
   ];
 
@@ -68,12 +68,14 @@ const Layout = ({ children }) => {
             >
               {sidebarMinimized ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
             </button>
-            <button
-              className="sidebar-close"
-              onClick={() => setSidebarOpen(false)}
-            >
-              <X size={24} />
-            </button>
+            {!sidebarMinimized && (
+              <button
+                className="sidebar-close"
+                onClick={() => setSidebarOpen(false)}
+              >
+                <X size={24} />
+              </button>
+            )}
           </div>
         </div>
 
@@ -131,7 +133,7 @@ const Layout = ({ children }) => {
               {location.pathname === '/dashboard' && 'Dashboard'}
               {location.pathname === '/upload' && 'Upload Document'}
               {location.pathname.startsWith('/document/') && 'Document Details'}
-              {location.pathname.startsWith('/qa/') && 'Q&A Session'}
+              {location.pathname.startsWith('/qa/') && 'LawgicAI'}
               {location.pathname === '/compare' && 'Compare Documents'}
             </h1>
           </div>

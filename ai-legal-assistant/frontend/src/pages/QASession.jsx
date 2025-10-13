@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { Send, Bot, User, Loader2, Copy, Check, MessageSquare, Search } from 'lucide-react';
+import { Send, Bot, User, Loader2, Copy, Check } from 'lucide-react';
 import { qaAPI } from '../api/qa';
 import './QASession.css';
 
@@ -10,7 +10,6 @@ const QASession = () => {
   const [messages, setMessages] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState(null);
-  const [searchTerm, setSearchTerm] = useState('');
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
 
@@ -153,41 +152,9 @@ const QASession = () => {
     return timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
-  const handleSearch = (e) => {
-    setSearchTerm(e.target.value);
-  };
-
-  // Filter messages based on search term
-  const filteredMessages = messages.filter(message => 
-    message.content.toLowerCase().includes(searchTerm.toLowerCase())
-  );
 
   return (
     <div className="home">
-      {/* Header matching Home page exactly */}
-      <div className="home-header">
-        <h1 className="home-title">Document Q&A</h1>
-        <div className="home-actions">
-          <div className="model-badge">
-            <MessageSquare size={20} />
-            Powered by Gemini 2.5 Flash
-          </div>
-        </div>
-      </div>
-
-      {/* Search bar matching Home page */}
-      <div className="search-filters">
-        <div className="search-bar">
-          <Search size={20} className="search-icon" />
-          <input
-            type="text"
-            placeholder="Search conversation..."
-            value={searchTerm}
-            onChange={handleSearch}
-            className="search-input"
-          />
-        </div>
-      </div>
 
       {/* Messages Area */}
       <div className="documents-table">
@@ -226,7 +193,7 @@ const QASession = () => {
           </div>
         ) : (
           <div className="messages-list">
-            {filteredMessages.map((message) => (
+            {messages.map((message) => (
               <div key={message.id} className={`message-row ${message.type}`}>
                 <div className="message-avatar">
                   {message.type === 'user' ? (
