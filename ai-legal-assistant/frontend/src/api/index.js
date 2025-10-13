@@ -2,7 +2,11 @@ import axios from 'axios';
 
 // Build a robust base URL for Supabase Edge Functions
 const DEFAULT_SUPABASE_URL = 'https://iuxqomqbxfoetnieaorw.supabase.co';
-const rawSupabaseUrl = process.env.REACT_APP_SUPABASE_URL || DEFAULT_SUPABASE_URL;
+// If running on localhost use env (for dev), otherwise force deployed Supabase URL
+const isLocalhost = typeof window !== 'undefined' && /localhost|127\.0\.0\.1/.test(window.location.hostname);
+const rawSupabaseUrl = isLocalhost
+  ? (process.env.REACT_APP_SUPABASE_URL || DEFAULT_SUPABASE_URL)
+  : DEFAULT_SUPABASE_URL;
 // Strip any trailing slashes to avoid double slashes
 const normalizedSupabaseUrl = rawSupabaseUrl.replace(/\/+$/, '');
 // Final base URL for our Edge Function (no trailing slash)
