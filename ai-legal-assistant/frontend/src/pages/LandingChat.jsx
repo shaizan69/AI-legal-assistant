@@ -117,7 +117,8 @@ const LandingChat = () => {
 
   const handleCleanupOrphaned = async () => {
     try {
-      const response = await fetch('/api/free/cleanup-orphaned', {
+      const base = (process.env.REACT_APP_SUPABASE_URL || 'https://iuxqomqbxfoetnieaorw.supabase.co').replace(/\/+$/, '');
+      const response = await fetch(`${base}/functions/v1/api/free/cleanup-orphaned`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
