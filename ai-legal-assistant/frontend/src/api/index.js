@@ -1,7 +1,11 @@
 import axios from 'axios';
 
-// Use Supabase Edge Functions as backend
-const API_BASE_URL = process.env.REACT_APP_SUPABASE_URL + '/functions/v1/api';
+// Build a robust base URL for Supabase Edge Functions
+const rawSupabaseUrl = process.env.REACT_APP_SUPABASE_URL || '';
+// Strip any trailing slashes to avoid double slashes
+const normalizedSupabaseUrl = rawSupabaseUrl.replace(/\/+$/, '');
+// Final base URL for our Edge Function (no trailing slash)
+export const API_BASE_URL = `${normalizedSupabaseUrl}/functions/v1/api`;
 
 // Create axios instance
 const api = axios.create({
