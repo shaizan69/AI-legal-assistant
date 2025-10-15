@@ -3,11 +3,9 @@ import { createClient } from '@supabase/supabase-js';
 // Supabase configuration
 const supabaseUrl = process.env.REACT_APP_SUPABASE_URL || 'https://your-project.supabase.co';
 const supabaseAnonKey = process.env.REACT_APP_SUPABASE_ANON_KEY || 'your-anon-key';
-const supabaseServiceKey = process.env.REACT_APP_SUPABASE_SERVICE_KEY || 'your-service-key';
 
 // Create Supabase clients
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
-export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
 // Storage bucket name
 export const STORAGE_BUCKET = 'legal-documents';
@@ -15,8 +13,8 @@ export const STORAGE_BUCKET = 'legal-documents';
 // File upload helper
 export const uploadFile = async (file, path, options = {}) => {
   try {
-    // Use admin client for uploads to bypass RLS
-    const { data, error } = await supabaseAdmin.storage
+    // Use anon client; bucket must allow uploads with anon key
+    const { data, error } = await supabase.storage
       .from(STORAGE_BUCKET)
       .upload(path, file, {
         cacheControl: '3600',
@@ -47,7 +45,7 @@ export const getFileUrl = (path) => {
 // Delete file helper
 export const deleteFile = async (path) => {
   try {
-    const { error } = await supabaseAdmin.storage
+    const { error } = await supabase.storage
       .from(STORAGE_BUCKET)
       .remove([path]);
 

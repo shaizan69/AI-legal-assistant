@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -9,6 +10,14 @@ const corsHeaders = {
 // Gemini API configuration
 const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') ?? ''
 const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-2.5-flash'
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? ''
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+const STORAGE_BUCKET = 'legal-documents'
+
+// Supabase Admin client for privileged operations (storage uploads)
+const supabaseAdmin = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
+  ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+  : null
 
 // Helper function to call Gemini API
 async function callGeminiAPI(prompt: string, context: string = '') {
@@ -311,6 +320,39 @@ serve(async (req) => {
         }
       } catch (e) {
         return new Response(JSON.stringify({ error: 'Upload failed', details: String(e) }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 })
+      }
+    }
+
+    // Direct upload via Edge Function using service role (bypass RLS)
+    if (path === '/upload/direct') {
+      if (!supabaseAdmin) {
+        return new Response(JSON.stringify({ error: 'Server storage client not configured' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 })
+      }
+      try {
+        if (!req.headers.get('content-type')?.includes('multipart/form-data')) {
+          return new Response(JSON.stringify({ error: 'multipart/form-data required' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 })
+        }
+        const form = await req.formData()
+        const file = form.get('file') as File | null
+        let pathParam = (form.get('path') as string | null) ?? ''
+        if (!file) {
+          return new Response(JSON.stringify({ error: 'file is required' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 })
+        }
+        if (!pathParam) {
+          const ts = new Date().toISOString().replace(/[:.]/g, '-')
+          const fname = (file as File).name || 'upload.bin'
+          pathParam = `anonymous/${ts}_${fname}`
+        }
+        const { data, error } = await supabaseAdmin.storage
+          .from(STORAGE_BUCKET)
+          .upload(pathParam, file, { upsert: false, cacheControl: '3600' })
+        if (error) {
+          return new Response(JSON.stringify({ error: error.message }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 })
+        }
+        const { data: pub } = supabaseAdmin.storage.from(STORAGE_BUCKET).getPublicUrl(pathParam)
+        return new Response(JSON.stringify({ path: data?.path ?? pathParam, publicUrl: pub.publicUrl }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+      } catch (e) {
+        return new Response(JSON.stringify({ error: 'Direct upload failed', details: String(e) }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 })
       }
     }
 
