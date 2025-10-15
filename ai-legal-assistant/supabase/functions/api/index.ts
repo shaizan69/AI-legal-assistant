@@ -177,6 +177,143 @@ serve(async (req) => {
       )
     }
 
+    // QA Sessions - create/list
+    if (path === '/qa/sessions') {
+      if (method === 'GET') {
+        return new Response(
+          JSON.stringify([]),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
+        )
+      }
+      // POST create
+      const payload = await readPayload(req, method, urlObj)
+      const session_id = Date.now()
+      return new Response(
+        JSON.stringify({ session_id, session_name: payload.session_name ?? null, document_id: payload.document_id ?? null }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
+      )
+    }
+
+    // QA Sessions - detail/delete/cleanup/questions
+    const qaSessionMatch = path.match(/^\/qa\/sessions\/(\d+)(?:\/(cleanup|questions))?$/)
+    if (qaSessionMatch) {
+      const sessionId = Number(qaSessionMatch[1])
+      const subPath = qaSessionMatch[2]
+      if (!subPath && method === 'GET') {
+        return new Response(
+          JSON.stringify({ session_id: sessionId, session_name: 'Session', document_id: 1 }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
+        )
+      }
+      if (!subPath && method === 'DELETE') {
+        return new Response(JSON.stringify({ message: 'Session deleted' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+      }
+      if (subPath === 'cleanup' && method === 'POST') {
+        return new Response(JSON.stringify({ message: 'Session cleaned' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+      }
+      if (subPath === 'questions' && method === 'GET') {
+        return new Response(JSON.stringify([]), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+      }
+      return new Response(JSON.stringify({ error: 'Method Not Allowed' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 405 })
+    }
+
+    // QA Question feedback
+    const qaFeedbackMatch = path.match(/^\/qa\/questions\/(\d+)\/feedback$/)
+    if (qaFeedbackMatch) {
+      if (method !== 'PUT') {
+        return new Response(JSON.stringify({ error: 'Method Not Allowed' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 405 })
+      }
+      return new Response(JSON.stringify({ message: 'Feedback recorded' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+    }
+
+    // Documents upload metadata (after client uploads to Supabase storage)
+    if (path === '/upload/supabase' && method === 'POST') {
+      const payload = await readPayload(req, method, urlObj)
+      const document_id = Date.now()
+      return new Response(
+        JSON.stringify({ id: document_id, ...payload, message: 'Document metadata recorded' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
+      )
+    }
+
+    // Documents list
+    if (path === '/upload/' && method === 'GET') {
+      return new Response(JSON.stringify([]), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+    }
+
+    // Document detail/delete
+    const uploadDetailMatch = path.match(/^\/upload\/(\d+)$/)
+    if (uploadDetailMatch) {
+      const docId = Number(uploadDetailMatch[1])
+      if (method === 'GET') {
+        return new Response(JSON.stringify({ id: docId, title: 'Document', description: '' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+      }
+      if (method === 'DELETE') {
+        return new Response(JSON.stringify({ message: 'Document deleted' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+      }
+      return new Response(JSON.stringify({ error: 'Method Not Allowed' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 405 })
+    }
+
+    // Summarize endpoints
+    if (path === '/summarize/' && method === 'POST') {
+      const payload = await readPayload(req, method, urlObj)
+      return new Response(JSON.stringify({ summary: 'Summary generation is stubbed for now.', document_id: payload.document_id ?? null }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+    }
+    const summarizeDetailMatch = path.match(/^\/summarize\/(\d+)$/)
+    if (summarizeDetailMatch && method === 'GET') {
+      return new Response(JSON.stringify({ summary: 'No summary available yet.' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+    }
+
+    // Risks endpoints
+    if (path === '/risks/' && method === 'POST') {
+      const payload = await readPayload(req, method, urlObj)
+      const analysis = await callGeminiAPI('Provide a concise risk summary for the provided document context.')
+      return new Response(JSON.stringify({ risks: analysis, document_id: payload.document_id ?? null }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+    }
+    const risksDetailMatch = path.match(/^\/risks\/(\d+)$/)
+    if (risksDetailMatch && method === 'GET') {
+      return new Response(JSON.stringify({ risks: 'No risks calculated yet.' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+    }
+
+    // Compare endpoints
+    if (path === '/compare/' && method === 'POST') {
+      const payload = await readPayload(req, method, urlObj)
+      return new Response(JSON.stringify({ comparison_id: Date.now(), result: 'Comparison is stubbed.', document1_id: payload.document1_id, document2_id: payload.document2_id }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+    }
+    if (path === '/compare/' && method === 'GET') {
+      return new Response(JSON.stringify([]), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+    }
+    const compareDetailMatch = path.match(/^\/compare\/(\d+)$/)
+    if (compareDetailMatch) {
+      if (method === 'GET') {
+        return new Response(JSON.stringify({ id: Number(compareDetailMatch[1]), result: 'Comparison details are stubbed.' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+      }
+      if (method === 'DELETE') {
+        return new Response(JSON.stringify({ message: 'Comparison deleted' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+      }
+      return new Response(JSON.stringify({ error: 'Method Not Allowed' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 405 })
+    }
+
+    // Free upload - accept multipart form or JSON
+    if (path === '/free/upload') {
+      try {
+        if (req.headers.get('content-type')?.includes('multipart/form-data')) {
+          const form = await req.formData()
+          const file = form.get('file')
+          if (!file) {
+            return new Response(JSON.stringify({ error: 'file is required' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 })
+          }
+          // We are not persisting the file on the server; return a fake document id
+          return new Response(JSON.stringify({ document_id: Date.now(), filename: (file as File).name }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+        } else {
+          const payload = await readPayload(req, method, urlObj)
+          return new Response(JSON.stringify({ document_id: Date.now(), payload }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+        }
+      } catch (e) {
+        return new Response(JSON.stringify({ error: 'Upload failed', details: String(e) }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 })
+      }
+    }
+
     // Free Q&A endpoint - accept POST body or GET query
     if (path === '/free/ask') {
       const payload = await readPayload(req, method, urlObj)

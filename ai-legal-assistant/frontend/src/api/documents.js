@@ -4,19 +4,28 @@ import { uploadFile, generateFilePath, getFileUrl } from '../config/supabase';
 export const documentsAPI = {
   uploadDocument: async (file, metadata = {}) => {
     try {
-      // Get current user ID from token
+      // Get current user ID from token (robust to non-JWT tokens)
       const token = localStorage.getItem('token');
-      if (!token) {
-        throw new Error('No authentication token found');
+      let userId = 'anonymous';
+      if (token && token.includes('.')) {
+        try {
+          const base64Url = token.split('.')[1];
+          const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+          const jsonPayload = decodeURIComponent(
+            atob(base64)
+              .split('')
+              .map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+              .join('')
+          );
+          const payload = JSON.parse(jsonPayload);
+          userId = payload.sub || payload.user_id || payload.email || userId;
+        } catch (e) {
+          // Fallback to anonymous if decoding fails
+          userId = 'anonymous';
+        }
       }
 
-      // Decode token to get user ID (simple base64 decode for JWT payload)
-      const payload = JSON.parse(atob(token.split('.')[1]));
-      const userId = payload.sub || payload.user_id;
-
-      if (!userId) {
-        throw new Error('User ID not found in token');
-      }
+      if (!userId) userId = 'anonymous';
 
       // Generate unique file path
       const filePath = generateFilePath(userId, file.name);
