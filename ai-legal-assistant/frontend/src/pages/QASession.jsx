@@ -1,11 +1,14 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { Send, Bot, User, Loader2, Copy, Check } from 'lucide-react';
 import { qaAPI } from '../api/qa';
 import './QASession.css';
 
 const QASession = () => {
   const { sessionId } = useParams();
+  const [searchParams] = useSearchParams();
+  const documentParam = searchParams.get('document');
+  const [activeSessionId, setActiveSessionId] = useState(sessionId ? Number(sessionId) : NaN);
   const [question, setQuestion] = useState('');
   const [messages, setMessages] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -22,10 +25,22 @@ const QASession = () => {
   }, [messages]);
 
   useEffect(() => {
-    // Load existing questions for the session
+    // Ensure we have a sessionId: if not in route, create one from document param
     (async () => {
       try {
-        const items = await qaAPI.getSessionQuestions(Number(sessionId));
+        let sid = activeSessionId;
+        if (!sid || Number.isNaN(sid)) {
+          const docId = documentParam;
+          if (docId) {
+            const created = await qaAPI.createSession(docId);
+            sid = created.session_id || created.id || created.sessionId;
+            setActiveSessionId(sid);
+          }
+        }
+        if (!sid || Number.isNaN(sid)) {
+          return; // nothing to load yet
+        }
+        const items = await qaAPI.getSessionQuestions(Number(sid));
         const mapped = items.map((q) => ([
           { id: `q-${q.id}`, type: 'user', content: q.question, timestamp: new Date(q.asked_at || q.created_at || Date.now()) },
           { id: `a-${q.id}`, type: 'ai', content: q.answer, timestamp: new Date(q.answered_at || Date.now()) }
@@ -48,7 +63,7 @@ const QASession = () => {
         }
       }
     })();
-  }, [sessionId]);
+  }, [sessionId, documentParam]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -78,7 +93,8 @@ const QASession = () => {
     setMessages(prev => [...prev, loadingMessage]);
 
     try {
-      const res = await qaAPI.askQuestion(userQuestion, Number(sessionId));
+      const sid = activeSessionId && !Number.isNaN(activeSessionId) ? activeSessionId : undefined;
+      const res = await qaAPI.askQuestion(userQuestion, sid);
       
       // Remove loading message and add actual response
       setMessages(prev => {

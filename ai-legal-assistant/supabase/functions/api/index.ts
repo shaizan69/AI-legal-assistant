@@ -19,6 +19,40 @@ const supabaseAdmin = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
   ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
   : null
 
+// Helpers to encode/decode storage path into a URL-safe id
+function encodeId(path: string): string {
+  return btoa(path).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+}
+function decodeId(id: string): string {
+  const base64 = id.replace(/-/g, '+').replace(/_/g, '/')
+  const pad = base64.length % 4 === 0 ? '' : '='.repeat(4 - (base64.length % 4))
+  return atob(base64 + pad)
+}
+
+// List objects in bucket (one level of folders)
+async function listAllObjects(prefix = ''): Promise<Array<{ name: string; id: string; path: string; updated_at?: string; metadata?: any; size?: number }>> {
+  if (!supabaseAdmin) return []
+  const results: Array<{ name: string; id: string; path: string; updated_at?: string; metadata?: any; size?: number }> = []
+  const { data: root, error } = await supabaseAdmin.storage.from(STORAGE_BUCKET).list(prefix, { limit: 1000 })
+  if (error || !root) return results
+  for (const entry of root) {
+    if (entry.name.endsWith('/')) continue
+    if (entry.id) {
+      // newer SDK entries may include id/updated_at/metadata/size
+    }
+    const fullPath = prefix ? `${prefix}/${entry.name}` : entry.name
+    results.push({ name: entry.name, id: encodeId(fullPath), path: fullPath, updated_at: (entry as any).updated_at, metadata: (entry as any).metadata, size: (entry as any).metadata?.size })
+  }
+  // list subfolders
+  for (const entry of root) {
+    if ((entry as any).type === 'folder') {
+      const sub = await listAllObjects(prefix ? `${prefix}/${entry.name}` : entry.name)
+      results.push(...sub)
+    }
+  }
+  return results
+}
+
 // Helper function to call Gemini API
 async function callGeminiAPI(prompt: string, context: string = '') {
   try {
@@ -247,18 +281,46 @@ serve(async (req) => {
 
     // Documents list
     if (path === '/upload/' && method === 'GET') {
-      return new Response(JSON.stringify([]), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+      if (!supabaseAdmin) {
+        return new Response(JSON.stringify({ documents: [], pages: 1, total: 0 }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+      }
+      const objects = await listAllObjects('')
+      const documents = objects.map(obj => ({
+        id: obj.id,
+        title: obj.name,
+        document_type: 'document',
+        processing_status: 'completed',
+        is_processed: true,
+        file_size: obj.size ?? 0,
+        created_at: obj.updated_at ?? new Date().toISOString(),
+        file_path: obj.path,
+      }))
+      return new Response(JSON.stringify({ documents, pages: 1, total: documents.length }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
     }
 
     // Document detail/delete
-    const uploadDetailMatch = path.match(/^\/upload\/(\d+)$/)
+    const uploadDetailMatch = path.match(/^\/upload\/([A-Za-z0-9_-]+)$/)
     if (uploadDetailMatch) {
-      const docId = Number(uploadDetailMatch[1])
+      const id = uploadDetailMatch[1]
       if (method === 'GET') {
-        return new Response(JSON.stringify({ id: docId, title: 'Document', description: '' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+        try {
+          const pathDecoded = decodeId(id)
+          const name = pathDecoded.split('/').pop() || 'Document'
+          return new Response(JSON.stringify({ id, title: name, file_path: pathDecoded, processing_status: 'completed' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+        } catch {
+          return new Response(JSON.stringify({ error: 'Invalid id' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 })
+        }
       }
       if (method === 'DELETE') {
-        return new Response(JSON.stringify({ message: 'Document deleted' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+        if (!supabaseAdmin) return new Response(JSON.stringify({ error: 'Not configured' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 })
+        try {
+          const pathDecoded = decodeId(id)
+          const { error } = await supabaseAdmin.storage.from(STORAGE_BUCKET).remove([pathDecoded])
+          if (error) return new Response(JSON.stringify({ error: error.message }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 })
+          return new Response(JSON.stringify({ message: 'Document deleted' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
+        } catch (e) {
+          return new Response(JSON.stringify({ error: 'Delete failed' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 })
+        }
       }
       return new Response(JSON.stringify({ error: 'Method Not Allowed' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 405 })
     }

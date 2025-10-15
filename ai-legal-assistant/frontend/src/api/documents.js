@@ -30,20 +30,14 @@ export const documentsAPI = {
       // Generate unique file path
       const filePath = generateFilePath(userId, file.name);
 
-      // Upload file to Supabase Storage (anon). If it fails (RLS/JWS), fallback to server direct upload
-      let uploadResult;
-      try {
-        uploadResult = await uploadFile(file, filePath);
-      } catch (e) {
-        // fallback: upload via edge function using service role
-        const form = new FormData();
-        form.append('file', file);
-        form.append('path', filePath);
-        const { data } = await api.post('/upload/direct', form, {
-          headers: { 'Content-Type': 'multipart/form-data' },
-        });
-        uploadResult = { path: data.path };
-      }
+      // Always upload via edge function using service role to avoid RLS issues
+      const form = new FormData();
+      form.append('file', file);
+      form.append('path', filePath);
+      const { data: direct } = await api.post('/upload/direct', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      const uploadResult = { path: direct.path };
       
       // Get public URL
       const fileUrl = getFileUrl(filePath);
