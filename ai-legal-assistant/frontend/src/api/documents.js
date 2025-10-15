@@ -36,6 +36,9 @@ export const documentsAPI = {
       form.append('path', filePath);
       const { data: direct } = await api.post('/upload/direct', form, {
         headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 180000, // 3 minutes for large files
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
       });
       const uploadResult = { path: direct.path };
       
