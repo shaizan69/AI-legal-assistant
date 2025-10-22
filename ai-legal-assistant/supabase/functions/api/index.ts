@@ -111,8 +111,14 @@ serve(async (req) => {
     const { method, url } = req
     const urlObj = new URL(url)
     const rawPath = urlObj.pathname
-    // normalize so both /api/xyz and /xyz work
-    const path = rawPath.replace(/^\/api(\/|$)/, '/');
+    // Normalize so both /functions/v1/api/xyz, /api/xyz and /xyz work
+    let path = rawPath
+      .replace(/^\/(functions\/v\d+)?\/?api(\/|$)/, '/')
+      .replace(/^\/(functions\/v\d+)(\/|$)/, '/')
+      .replace(/\/+/g, '/')
+    if (path.length > 1 && path.endsWith('/')) {
+      path = path.slice(0, -1)
+    }
 
     console.log(`Request: ${method} ${path}`)
 
@@ -279,8 +285,8 @@ serve(async (req) => {
       )
     }
 
-    // Documents list
-    if (path === '/upload/' && method === 'GET') {
+    // Documents list (support with/without trailing slash)
+    if ((path === '/upload' || path === '/upload/') && method === 'GET') {
       if (!supabaseAdmin) {
         return new Response(JSON.stringify({ documents: [], pages: 1, total: 0 }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
       }
@@ -325,8 +331,8 @@ serve(async (req) => {
       return new Response(JSON.stringify({ error: 'Method Not Allowed' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 405 })
     }
 
-    // Summarize endpoints
-    if (path === '/summarize/' && method === 'POST') {
+    // Summarize endpoints (support with/without trailing slash)
+    if ((path === '/summarize' || path === '/summarize/') && method === 'POST') {
       const payload = await readPayload(req, method, urlObj)
       return new Response(JSON.stringify({ summary: 'Summary generation is stubbed for now.', document_id: payload.document_id ?? null }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
     }
@@ -335,8 +341,8 @@ serve(async (req) => {
       return new Response(JSON.stringify({ summary: 'No summary available yet.' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
     }
 
-    // Risks endpoints
-    if (path === '/risks/' && method === 'POST') {
+    // Risks endpoints (support with/without trailing slash)
+    if ((path === '/risks' || path === '/risks/') && method === 'POST') {
       const payload = await readPayload(req, method, urlObj)
       const analysis = await callGeminiAPI('Provide a concise risk summary for the provided document context.')
       return new Response(JSON.stringify({ risks: analysis, document_id: payload.document_id ?? null }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
@@ -346,12 +352,12 @@ serve(async (req) => {
       return new Response(JSON.stringify({ risks: 'No risks calculated yet.' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
     }
 
-    // Compare endpoints
-    if (path === '/compare/' && method === 'POST') {
+    // Compare endpoints (support with/without trailing slash)
+    if ((path === '/compare' || path === '/compare/') && method === 'POST') {
       const payload = await readPayload(req, method, urlObj)
       return new Response(JSON.stringify({ comparison_id: Date.now(), result: 'Comparison is stubbed.', document1_id: payload.document1_id, document2_id: payload.document2_id }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
     }
-    if (path === '/compare/' && method === 'GET') {
+    if ((path === '/compare' || path === '/compare/') && method === 'GET') {
       return new Response(JSON.stringify([]), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
     }
     const compareDetailMatch = path.match(/^\/compare\/(\d+)$/)
@@ -514,9 +520,24 @@ serve(async (req) => {
           '/auth/login',
           '/auth/me',
           '/qa/ask',
+          '/qa/sessions',
+          '/qa/sessions/:id',
+          '/qa/sessions/:id/cleanup',
+          '/qa/sessions/:id/questions',
           '/free/ask',
           '/free/analyze-risks',
-          '/free/session'
+          '/free/session',
+          '/free/session/:id',
+          '/upload',
+          '/upload/:id',
+          '/upload/direct',
+          '/upload/supabase',
+          '/summarize',
+          '/summarize/:id',
+          '/risks',
+          '/risks/:id',
+          '/compare',
+          '/compare/:id'
         ]
       }),
       { 
