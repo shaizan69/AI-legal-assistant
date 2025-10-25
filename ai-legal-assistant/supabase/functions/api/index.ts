@@ -59,13 +59,13 @@ class GeminiLLMService {
 
       console.log(`📊 Gemini API response status: ${response.status}`)
 
-      if (!response.ok) {
+    if (!response.ok) {
         const errorText = await response.text()
         console.error(`❌ Gemini API error response: ${errorText}`)
         throw new Error(`Gemini API error: ${response.status} ${response.statusText} - ${errorText}`)
-      }
+    }
 
-      const data = await response.json()
+    const data = await response.json()
       console.log(`📦 Gemini API response received (${JSON.stringify(data).length} chars)`)
 
       if (data.candidates && data.candidates[0] && data.candidates[0].content) {
@@ -76,7 +76,7 @@ class GeminiLLMService {
         console.error(`❌ Invalid Gemini response structure:`, data)
         throw new Error('No response from Gemini - invalid response structure')
       }
-    } catch (error) {
+  } catch (error) {
       console.error('❌ Gemini API error:', error)
       throw new Error(`Failed to generate text: ${error.message}`)
     }
@@ -279,25 +279,25 @@ serve(async (req) => {
     if (path === '/auth/login' && method === 'POST') {
       try {
         const payload = await req.json()
-        const username = String(payload.username ?? '')
-        const password = String(payload.password ?? '')
-        
+      const username = String(payload.username ?? '')
+      const password = String(payload.password ?? '')
+      
         console.log(`Login attempt for: ${username}`)
-        
+      
         // Hardcoded test user
-        if (username === 'test@example.com' && password === 'testpass') {
-          const token = btoa(JSON.stringify({ 
-            email: username, 
+      if (username === 'test@example.com' && password === 'testpass') {
+        const token = btoa(JSON.stringify({ 
+          email: username, 
             exp: Date.now() + 3600000,
             sub: '1'
-          }))
+        }))
           
           console.log(`Login successful for: ${username}`)
-          
-          return new Response(
-            JSON.stringify({ 
-              access_token: token,
-              token_type: 'bearer',
+        
+        return new Response(
+          JSON.stringify({ 
+            access_token: token,
+            token_type: 'bearer',
               expires_in: 3600,
               user: {
                 id: 1,
@@ -305,22 +305,22 @@ serve(async (req) => {
                 username: 'testuser',
                 full_name: 'Test User'
               }
-            }),
-            { 
-              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-              status: 200 
-            }
-          )
-        } else {
+          }),
+          { 
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 200 
+          }
+        )
+      } else {
           console.log(`Login failed for: ${username}`)
-          return new Response(
+        return new Response(
             JSON.stringify({ 
               error: 'Invalid credentials',
               message: 'Username or password is incorrect'
             }),
-            { 
-              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-              status: 401 
+          { 
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 401 
             }
           )
         }
@@ -359,23 +359,23 @@ serve(async (req) => {
     if (path === '/qa/ask' && method === 'POST') {
       try {
         const payload = await req.json()
-        const question = String(payload.question ?? '')
-        const session_id = payload.session_id ? Number(payload.session_id) : undefined
-
+      const question = String(payload.question ?? '')
+      const session_id = payload.session_id ? Number(payload.session_id) : undefined
+      
         console.log(`🤖 Q&A question: ${question}`)
-
+      
         if (!question.trim()) {
-          return new Response(
+        return new Response(
             JSON.stringify({
               error: 'Question is required',
               message: 'Please provide a question'
             }),
-            {
-              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-              status: 400
-            }
-          )
-        }
+          { 
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 400 
+          }
+        )
+      }
 
         if (!session_id) {
           return new Response(
@@ -399,8 +399,8 @@ serve(async (req) => {
 
         if (sessionError || !session) {
           console.error('❌ Session not found:', sessionError)
-          return new Response(
-            JSON.stringify({
+      return new Response(
+        JSON.stringify({ 
               error: 'Session not found',
               message: 'Please provide a valid session_id'
             }),
@@ -461,7 +461,7 @@ serve(async (req) => {
         return new Response(
           JSON.stringify({
             answer: result.answer,
-            question_id: Date.now(),
+          question_id: Date.now(),
             session_id: session_id,
             confidence: result.confidence,
             model_used: result.model_used,
@@ -951,7 +951,7 @@ serve(async (req) => {
               }),
               { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
             )
-          } catch (e) {
+        } catch (e) {
             console.error('Documents list error:', e)
             return new Response(
               JSON.stringify({ error: 'Failed to fetch documents', details: String(e) }),
@@ -1068,7 +1068,7 @@ serve(async (req) => {
               bucketName = name
               console.log(`⚠️ Used bucket ${name} despite error: ${uploadResult.error.message}`)
               break
-            } else {
+        } else {
               console.log(`❌ Bucket "${name}" not found, trying next...`)
             }
           }
@@ -1164,7 +1164,7 @@ serve(async (req) => {
             try {
               await supabase.storage.from(bucketName).remove([existingDoc.supabase_path])
               console.log(`🗑️ Deleted existing file from storage: ${existingDoc.supabase_path}`)
-            } catch (e) {
+      } catch (e) {
               console.warn(`⚠️ Failed to delete existing file from storage: ${e}`)
             }
           }
@@ -1221,9 +1221,9 @@ serve(async (req) => {
           console.log('✅ Document already marked as processed')
 
           console.log(`🎉 Upload completed successfully! Document ID: ${document.id}`)
-
-          return new Response(
-            JSON.stringify({
+      
+      return new Response(
+        JSON.stringify({ 
               id: document.id,
               document_id: document.id,
               filename: uniqueName,
@@ -1233,14 +1233,14 @@ serve(async (req) => {
           )
         } catch (dbErr) {
           console.error('❌ Database operation error:', dbErr)
-          return new Response(
+      return new Response(
             JSON.stringify({ error: 'Database operation failed', details: String(dbErr) }),
             { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
           )
         }
       } catch (e) {
         console.error('Upload error:', e)
-        return new Response(
+      return new Response(
           JSON.stringify({ error: 'Upload failed', details: String(e) }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
         )
