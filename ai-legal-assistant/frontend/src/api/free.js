@@ -7,9 +7,7 @@ export const freeAPI = {
     const formData = new FormData();
     formData.append('file', file);
     return api.post('/free/upload', formData, {
-      headers: { 
-        'apikey': process.env.REACT_APP_SUPABASE_ANON_KEY
-      },
+      headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
 

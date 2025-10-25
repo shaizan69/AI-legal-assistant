@@ -145,35 +145,29 @@ Risk Analysis:`
 // Initialize Gemini service
 const geminiService = new GeminiLLMService()
 
-// Test Gemini API connection on startup
-console.log('🤖 Testing Gemini API connection...')
-try {
-  if (GEMINI_API_KEY) {
-    console.log(`✅ Gemini API Key found (length: ${GEMINI_API_KEY.length})`)
-    console.log(`✅ Gemini Model: ${GEMINI_MODEL}`)
-    console.log('✅ Gemini service initialized successfully')
-  } else {
-    console.error('❌ GEMINI_API_KEY not found in environment variables')
-    console.error('❌ Please add GEMINI_API_KEY to Supabase Edge Function environment variables')
-  }
-} catch (error) {
-  console.error('❌ Gemini initialization error:', error)
-}
 
 // PDF text extraction function
 async function extractTextFromPDF(fileBuffer: ArrayBuffer, filename: string): Promise<string> {
   try {
     console.log('📄 Starting PDF text extraction...')
 
-    // Load PDF.js from CDN
-    const pdfjsLib = await import('https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.mjs')
+    // Try to use PDF.js from esm.sh which works better in Deno
+    const pdfjsLib = await import('https://esm.sh/pdfjs-dist@3.11.174/build/pdf.mjs')
+
+    // Configure PDF.js worker
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://esm.sh/pdfjs-dist@3.11.174/build/pdf.worker.mjs'
 
     // Load the PDF document
-    const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(fileBuffer) }).promise
+    const pdf = await pdfjsLib.getDocument({ 
+      data: new Uint8Array(fileBuffer),
+      useSystemFonts: true,
+      disableFontFace: true
+    }).promise
+    
     console.log(`📄 PDF loaded with ${pdf.numPages} pages`)
 
     let fullText = ''
-    const maxPages = Math.min(pdf.numPages, 50) // Limit to first 50 pages for performance
+    const maxPages = Math.min(pdf.numPages, 20) // Limit to first 20 pages for performance
 
     // Extract text from each page
     for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
@@ -205,7 +199,25 @@ async function extractTextFromPDF(fileBuffer: ArrayBuffer, filename: string): Pr
     return fullText || `PDF document: ${filename}. No readable text content found in the PDF.`
   } catch (error) {
     console.error('❌ PDF text extraction failed:', error)
-    throw new Error(`PDF text extraction failed: ${error.message}`)
+    
+    // Fallback: Try to extract basic text using a simpler approach
+    try {
+      console.log('🔄 Trying fallback text extraction...')
+      const uint8Array = new Uint8Array(fileBuffer)
+      const text = new TextDecoder('utf-8', { fatal: false }).decode(uint8Array)
+      
+      // Look for readable text patterns
+      const readableText = text.match(/[A-Za-z0-9\s.,!?;:'"()-]{10,}/g)?.join(' ') || ''
+      
+      if (readableText.length > 50) {
+        console.log(`✅ Fallback extraction found ${readableText.length} characters`)
+        return `PDF document: ${filename}\n\nExtracted text (fallback method):\n${readableText.substring(0, 2000)}${readableText.length > 2000 ? '...' : ''}`
+      }
+    } catch (fallbackError) {
+      console.error('❌ Fallback extraction also failed:', fallbackError)
+    }
+    
+    return `PDF document: ${filename}. Text extraction failed. The document may be image-based or encrypted. Please try with a text-based PDF file.`
   }
 }
 

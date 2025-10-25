@@ -18,6 +18,7 @@ const api = axios.create({
   timeout: 90000,
   headers: {
     'apikey': process.env.REACT_APP_SUPABASE_ANON_KEY,
+    'Content-Type': 'application/json',
   }
 });
 
