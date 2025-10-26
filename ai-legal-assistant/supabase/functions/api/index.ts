@@ -14,7 +14,7 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
 // Gemini LLM setup
 const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY')
-const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') || 'gemini-2.0-flash-exp'
+const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') || 'gemini-2.5-flash'
 
 class GeminiLLMService {
   private apiKey: string
@@ -25,15 +25,25 @@ class GeminiLLMService {
     this.modelName = GEMINI_MODEL
 
     if (!this.apiKey) {
-      console.error('❌ GEMINI_API_KEY is required')
+      console.error('❌ GEMINI_API_KEY is required - Please set this in Supabase Dashboard')
+      console.error('❌ Current API key value:', this.apiKey ? 'Present (length: ' + this.apiKey.length + ')' : 'Missing')
+    } else {
+      console.log(`✅ GEMINI_API_KEY is configured (${this.apiKey.substring(0, 4)}...${this.apiKey.substring(this.apiKey.length - 4)})`)
+      console.log(`✅ Using Gemini model: ${this.modelName}`)
     }
   }
 
-  async generateText(prompt: string, maxTokens: number = 1000, temperature: number = 0.7): Promise<string> {
+  async generateText(prompt: string, maxTokens: number = 300, temperature: number = 0.7): Promise<string> {
     try {
+      if (!this.apiKey || this.apiKey.length < 10) {
+        console.error(`❌ Invalid or missing Gemini API key. Please check your environment variables.`)
+        throw new Error('Missing or invalid Gemini API key. Please set GEMINI_API_KEY in Supabase Dashboard.')
+      }
+      
       console.log(`🤖 Generating text with Gemini (${this.modelName})...`)
       console.log(`📝 Prompt length: ${prompt.length} characters`)
 
+      // Using the same structure as the backend Python SDK
       const requestBody = {
         contents: [{
           parts: [{
@@ -44,12 +54,34 @@ class GeminiLLMService {
           maxOutputTokens: maxTokens,
           temperature: temperature,
           topP: 0.9,
-          topK: 40
-        }
+          topK: 40,
+          stopSequences: []
+        },
+        safetySettings: [
+          {
+            category: "HARM_CATEGORY_HARASSMENT",
+            threshold: "BLOCK_ONLY_HIGH"
+          },
+          {
+            category: "HARM_CATEGORY_HATE_SPEECH",
+            threshold: "BLOCK_ONLY_HIGH"
+          },
+          {
+            category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            threshold: "BLOCK_ONLY_HIGH"
+          },
+          {
+            category: "HARM_CATEGORY_DANGEROUS_CONTENT",
+            threshold: "BLOCK_ONLY_HIGH"
+          }
+        ]
       }
 
-      console.log(`🚀 Making request to Gemini API...`)
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${this.modelName}:generateContent?key=${this.apiKey}`, {
+      // Use v1 API for all models as the backend does
+      const apiUrl = `https://generativelanguage.googleapis.com/v1/models/${this.modelName}:generateContent?key=${this.apiKey}`
+      console.log(`🚀 Making request to Gemini API: ${apiUrl.substring(0, apiUrl.indexOf('?'))}...`)
+      
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -57,43 +89,170 @@ class GeminiLLMService {
         body: JSON.stringify(requestBody)
       })
 
-      console.log(`📊 Gemini API response status: ${response.status}`)
+      console.log(`📊 Gemini API response status: ${response.status} ${response.statusText}`)
 
-    if (!response.ok) {
+      if (!response.ok) {
         const errorText = await response.text()
         console.error(`❌ Gemini API error response: ${errorText}`)
+        
+        // Check for common API key errors
+        if (response.status === 400) {
+          console.error('❌ Bad request - check your API key and model name')
+        } else if (response.status === 401 || response.status === 403) {
+          console.error('❌ Authentication failed - invalid API key or permissions')
+        } else if (response.status === 404) {
+          console.error(`❌ Model "${this.modelName}" not found - check model name`)
+        } else if (response.status === 429) {
+          console.error('❌ Rate limit exceeded - slow down requests or check quota')
+        }
+        
         throw new Error(`Gemini API error: ${response.status} ${response.statusText} - ${errorText}`)
-    }
+      }
 
-    const data = await response.json()
+      const data = await response.json()
       console.log(`📦 Gemini API response received (${JSON.stringify(data).length} chars)`)
 
-      if (data.candidates && data.candidates[0] && data.candidates[0].content) {
-        const result = data.candidates[0].content.parts[0].text.trim()
-        console.log(`✅ Gemini response generated (${result.length} characters)`)
-        return result
-      } else {
-        console.error(`❌ Invalid Gemini response structure:`, data)
-        throw new Error('No response from Gemini - invalid response structure')
+      // Check for error in response
+      if (data.error) {
+        console.error(`❌ Gemini API returned error:`, data.error)
+        throw new Error(`Gemini API error: ${data.error.message || JSON.stringify(data.error)}`)
       }
-  } catch (error) {
+
+      // Debug the response structure but limit the output size
+      const dataStr = JSON.stringify(data);
+      console.log(`📊 Gemini response structure:`, dataStr.substring(0, 500) + (dataStr.length > 500 ? '...' : ''))
+
+      // Validate response structure - handle both old and new Gemini API formats
+      if (data.candidates && Array.isArray(data.candidates) && data.candidates.length > 0) {
+        const candidate = data.candidates[0]
+        
+        // New format: content.text (gemini-2.5-flash)
+        if (candidate.content && candidate.content.text) {
+          const text = candidate.content.text
+          if (typeof text === 'string') {
+            const result = text.trim()
+            console.log(`✅ Gemini response generated (new format) (${result.length} characters)`)
+            return result
+          }
+        }
+        
+        // Old format: content.parts[].text (gemini-1.0-pro, etc.)
+        if (candidate.content && candidate.content.parts && Array.isArray(candidate.content.parts) && candidate.content.parts.length > 0) {
+          const part = candidate.content.parts[0]
+          if (part.text && typeof part.text === 'string') {
+            const result = part.text.trim()
+            console.log(`✅ Gemini response generated (parts format) (${result.length} characters)`)
+            return result
+          }
+        }
+        
+        // Handle MAX_TOKENS finish reason - this means the response was cut off
+        if (candidate.finishReason === "MAX_TOKENS") {
+          console.log(`⚠️ Response was cut off due to MAX_TOKENS`);
+          
+          // Try to extract any text we can
+          if (candidate.content && candidate.content.parts && Array.isArray(candidate.content.parts)) {
+            const allParts = candidate.content.parts
+              .filter(part => part && part.text)
+              .map(part => part.text)
+              .join(" ");
+              
+            if (allParts && allParts.length > 0) {
+              console.log(`✅ Extracted partial response (${allParts.length} characters)`);
+              return allParts + " [Response truncated due to token limit]";
+            }
+          }
+          
+          // If we can't extract any text, return a helpful message
+          return "The response was cut off due to length limitations. Please try asking a more specific question or breaking your query into smaller parts.";
+        }
+        
+        // Handle other finish reasons
+        if (candidate.finishReason) {
+          console.log(`⚠️ Unusual finish reason: ${candidate.finishReason}`);
+          return `The model stopped generating content due to ${candidate.finishReason}. Please try rephrasing your question.`;
+        }
+        
+        // Special handling for role=model with no text (common in gemini-2.5-flash)
+        if (candidate.content && candidate.content.role === "model") {
+          console.log(`⚠️ Found model role but no text`);
+          return "I'm processing your request but couldn't generate a complete response. Please try rephrasing your question or providing more context.";
+        }
+        
+        console.error(`❌ Could not extract text from candidate:`, candidate)
+      } else {
+        console.error(`❌ No candidates in response:`, data)
+      }
+      
+      // If we get here, return a generic error message
+      return "I'm unable to generate a response at this time. Please try again later."
+    } catch (error) {
       console.error('❌ Gemini API error:', error)
-      throw new Error(`Failed to generate text: ${error.message}`)
+      
+      // Return a user-friendly error message
+      return `I encountered an error while processing your request: ${error.message}. Please try again or rephrase your question.`
+    }
+  }
+
+  // Helper function to clean document text before sending to LLM
+  private cleanDocumentText(text: string): string {
+    // If text is too short or appears to be a placeholder, return as is
+    if (!text || text.length < 100 || text.includes('unable to extract')) {
+      return text
+    }
+    
+    try {
+      // Remove any remaining PDF syntax that might confuse the LLM
+      let cleaned = text
+        // Remove common PDF syntax patterns
+        .replace(/\/[A-Za-z0-9]+/g, '')
+        .replace(/\d+\s+\d+\s+obj[\s\S]*?endobj/g, '')
+        .replace(/xref[\s\S]*?trailer/g, '')
+        .replace(/startxref\s*\d+/g, '')
+        .replace(/<<[\s\S]*?>>/g, '')
+        // Clean up whitespace
+        .replace(/\s+/g, ' ')
+        .trim()
+      
+      // If cleaning removed too much content, use original
+      if (cleaned.length < text.length * 0.5) {
+        console.log('⚠️ Cleaning removed too much content, using original text')
+        cleaned = text
+      }
+      
+      return cleaned
+    } catch (e) {
+      console.error('❌ Error cleaning document text:', e)
+      return text // Return original if cleaning fails
     }
   }
 
   async answerQuestion(question: string, context: string): Promise<any> {
     try {
-      const prompt = `You are an expert legal AI assistant. Answer the following question based ONLY on the provided context. Do not use external knowledge.
+      // Clean the document text first
+      const cleanedContext = this.cleanDocumentText(context)
+      
+      // For Indian legal documents, use a specialized prompt
+      const prompt = `You are an expert Indian legal assistant trained on Indian legal documents and laws. 
+You specialize in analyzing and answering questions about Indian legal documents including contracts, agreements, deeds, and court documents.
 
-Context:
-${context}
+Answer the following question based ONLY on the provided Indian legal document context.
+Do not use external knowledge or make up information. If the context doesn't contain relevant information, say so.
 
-Question: ${question}
+CONTEXT (Indian legal document):
+"""
+${cleanedContext}
+"""
 
-Answer:`
+QUESTION: ${question}
 
-      const answer = await this.generateText(prompt, 1200, 0.1)
+ANSWER (focusing on Indian legal context and terminology):`;
+
+      console.log(`📝 Question: "${question.substring(0, 100)}${question.length > 100 ? '...' : ''}"`)
+      console.log(`📄 Context length: ${cleanedContext.length} characters`)
+      
+      // Use lower temperature for more factual responses, limited to 300 tokens
+      const answer = await this.generateText(prompt, 300, 0.1)
 
       return {
         answer: answer,
@@ -109,28 +268,50 @@ Answer:`
 
   async detectRisks(text: string): Promise<any> {
     try {
-      const prompt = `Analyze the following legal document for potential risks and provide a comprehensive risk analysis.
+      // Clean the document text first
+      const cleanedText = this.cleanDocumentText(text)
+      
+      // For Indian legal documents, use a specialized prompt
+      const prompt = `You are an Indian legal risk analysis expert specializing in Indian law, contracts, and legal documents.
+Analyze the following Indian legal document for potential risks in the Indian legal context.
 
-Document:
-${text}
+DOCUMENT (Indian legal context):
+"""
+${cleanedText}
+"""
 
 Provide a structured risk analysis with:
-1. Risk Level (HIGH/MEDIUM/LOW)
+1. Overall Risk Level (HIGH/MEDIUM/LOW)
 2. Risk Categories (Contractual, Compliance, Financial, Operational, Legal)
-3. Specific risks identified
-4. Impact assessment
-5. Recommendations
+3. Specific risks identified under Indian law and legal practice
+4. Impact assessment considering Indian legal framework
+5. Recommendations for risk mitigation in the Indian legal context
 
-Risk Analysis:`
+Consider Indian legal principles, statutes, and case law where relevant, including:
+- Indian Contract Act, 1872
+- Specific Relief Act, 1963
+- Registration Act, 1908
+- Transfer of Property Act, 1882
+- Indian Stamp Act, 1899
+- Real Estate (Regulation and Development) Act, 2016 (RERA)
+- Indian Evidence Act, 1872
+- Relevant state-specific laws
 
-      const analysis = await this.generateText(prompt, 1000, 0.1)
+If the document doesn't contain enough information or doesn't appear to be a legal document, please state this clearly.
+
+RISK ANALYSIS:`;
+
+      console.log(`📄 Document length for risk analysis: ${cleanedText.length} characters`)
+      
+      // Use slightly higher temperature for more comprehensive analysis, limited to 300 tokens
+      const analysis = await this.generateText(prompt, 300, 0.2)
 
       return {
         analysis: analysis,
-        risk_level: "Medium",
+        risk_level: "Medium", // This is a placeholder, ideally would be extracted from the analysis
         risk_factors: [analysis],
-        recommendations: ["Review with legal expert"],
-        document_type: "legal",
+        recommendations: ["Review with Indian legal expert"],
+        document_type: "Indian legal document",
         analysis_date: new Date().toISOString(),
         model_used: this.modelName,
         confidence: 0.9
@@ -146,78 +327,132 @@ Risk Analysis:`
 const geminiService = new GeminiLLMService()
 
 
-// PDF text extraction function
+// PDF text extraction function with advanced filtering
 async function extractTextFromPDF(fileBuffer: ArrayBuffer, filename: string): Promise<string> {
   try {
-    console.log('📄 Starting PDF text extraction...')
-
-    // Try to use PDF.js from esm.sh which works better in Deno
-    const pdfjsLib = await import('https://esm.sh/pdfjs-dist@3.11.174/build/pdf.mjs')
-
-    // Configure PDF.js worker
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://esm.sh/pdfjs-dist@3.11.174/build/pdf.worker.mjs'
-
-    // Load the PDF document
-    const pdf = await pdfjsLib.getDocument({ 
-      data: new Uint8Array(fileBuffer),
-      useSystemFonts: true,
-      disableFontFace: true
-    }).promise
+    console.log('📄 Starting enhanced PDF text extraction...')
     
-    console.log(`📄 PDF loaded with ${pdf.numPages} pages`)
-
-    let fullText = ''
-    const maxPages = Math.min(pdf.numPages, 20) // Limit to first 20 pages for performance
-
-    // Extract text from each page
-    for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
-      try {
-        const page = await pdf.getPage(pageNum)
-        const textContent = await page.getTextContent()
-
-        // Extract text from text content items
-        const pageText = textContent.items
-          .map((item: any) => item.str || '')
-          .join(' ')
-          .replace(/\s+/g, ' ') // Normalize whitespace
-          .trim()
-
-        if (pageText) {
-          fullText += `Page ${pageNum}:\n${pageText}\n\n`
+    // Convert ArrayBuffer to Uint8Array
+    const uint8Array = new Uint8Array(fileBuffer)
+    
+    // Decode the buffer using Latin1 (more tolerant of binary data)
+    const rawText = new TextDecoder('latin1', { fatal: false }).decode(uint8Array)
+    
+    // Extract text from parentheses (where most text content lives in PDFs)
+    console.log('🔍 Extracting text from PDF content...')
+    const parenthesesMatches = rawText.match(/\(([^\(\)]{3,})\)/g) || []
+    
+    // Process and filter the extracted text
+    const extractedTextParts = []
+    
+    for (const match of parenthesesMatches) {
+      // Remove the parentheses and clean the text
+      const text = match.substring(1, match.length - 1)
+        .replace(/[^\x20-\x7E\n\r\t]/g, ' ') // Keep only printable ASCII
+        .replace(/\\(\d{3}|n|r|t|b|f|\\|\(|\))/g, ' ') // Remove escape sequences
+        .replace(/\s+/g, ' ')
+        .trim()
+      
+      // Only keep text that looks like natural language
+      // Must contain at least 3 letters and be at least 3 chars long
+      if (text.length >= 3 && /[a-zA-Z]{3,}/i.test(text)) {
+        extractedTextParts.push(text)
+      }
+    }
+    
+    // Reconstruct the text, handling word breaks that might occur in PDFs
+    let combinedText = ''
+    let previousPart = ''
+    
+    for (const part of extractedTextParts) {
+      // Check if this part continues from the previous one
+      if (previousPart && 
+          !previousPart.endsWith('.') && 
+          !previousPart.endsWith('?') && 
+          !previousPart.endsWith('!') &&
+          !previousPart.endsWith(':') &&
+          previousPart.length < 50) {
+        combinedText += ' ' + part
+      } else {
+        if (combinedText && !combinedText.endsWith(' ')) {
+          combinedText += ' '
         }
-      } catch (pageError) {
-        console.warn(`⚠️ Failed to extract text from page ${pageNum}:`, pageError)
-        fullText += `Page ${pageNum}: [Text extraction failed for this page]\n\n`
+        combinedText += part
+      }
+      previousPart = part
+    }
+    
+    // Clean up the combined text
+    combinedText = combinedText
+      .replace(/\s+/g, ' ')
+      .replace(/ \./g, '.')
+      .replace(/ ,/g, ',')
+      .replace(/ ;/g, ';')
+      .replace(/ :/g, ':')
+      .replace(/ \?/g, '?')
+      .replace(/ !/g, '!')
+      .replace(/ \)/g, ')')
+      .replace(/\( /g, '(')
+      .trim()
+    
+    // Filter out common PDF syntax patterns that might have slipped through
+    const pdfSyntaxPatterns = [
+      'obj', 'endobj', 'stream', 'endstream', 'xref', 'trailer', 'startxref',
+      'Type', 'Pages', 'Page', 'Font', 'XObject', 'ProcSet', 'ExtGState',
+      'Pattern', 'Shading', 'Properties', 'Filter', 'FlateDecode', 'Length',
+      'Resources', 'MediaBox', 'Contents', 'Rotate', 'Group', 'Annots'
+    ]
+    
+    // Create a regex to match these patterns as whole words
+    const syntaxRegex = new RegExp(`\\b(${pdfSyntaxPatterns.join('|')})\\b`, 'g')
+    
+    // Apply the filter
+    let filteredText = combinedText.replace(syntaxRegex, '')
+    
+    // Remove any remaining PDF-specific notation
+    filteredText = filteredText
+      .replace(/\/[A-Za-z0-9]+/g, '') // Remove PDF name objects like /F1, /Page, etc.
+      .replace(/\[\s*\]/g, '') // Remove empty arrays
+      .replace(/<<\s*>>/g, '') // Remove empty dictionaries
+      .replace(/\s+/g, ' ')
+      .trim()
+    
+    // If we have enough text, return it
+    if (filteredText.length > 200) {
+      console.log(`✅ Successfully extracted ${filteredText.length} characters of readable text`)
+      
+      // Format the text into paragraphs for better readability
+      const formattedText = filteredText
+        .replace(/\.\s+/g, '.\n\n') // Add paragraph breaks after sentences
+        .replace(/\n{3,}/g, '\n\n') // Normalize paragraph spacing
+      
+      return formattedText.substring(0, 15000) // Limit to 15K chars
+    }
+    
+    // If we don't have enough text, try a more aggressive approach
+    console.log('⚠️ Not enough text found, trying advanced extraction...')
+    
+    // Extract any sequence of words that looks like natural language
+    const wordPattern = /\b[A-Za-z]{3,}(?:\s+[A-Za-z]+){2,}\b/g
+    const wordMatches = rawText.match(wordPattern) || []
+    
+    if (wordMatches.length > 0) {
+      // Join the matches and clean up
+      const wordText = wordMatches.join(' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+      
+      if (wordText.length > 100) {
+        console.log(`✅ Advanced extraction found ${wordText.length} characters`)
+        return wordText.substring(0, 10000)
       }
     }
-
-    if (pdf.numPages > maxPages) {
-      fullText += `\n[Note: Only first ${maxPages} pages processed. Total pages: ${pdf.numPages}]`
-    }
-
-    console.log(`✅ PDF text extraction completed (${fullText.length} characters)`)
-    return fullText || `PDF document: ${filename}. No readable text content found in the PDF.`
+    
+    // If all else fails, return a placeholder
+    return `This document appears to be a PDF titled "${filename}" but doesn't contain easily extractable text content. It may be scanned, image-based, or heavily formatted.`
   } catch (error) {
-    console.error('❌ PDF text extraction failed:', error)
-    
-    // Fallback: Try to extract basic text using a simpler approach
-    try {
-      console.log('🔄 Trying fallback text extraction...')
-      const uint8Array = new Uint8Array(fileBuffer)
-      const text = new TextDecoder('utf-8', { fatal: false }).decode(uint8Array)
-      
-      // Look for readable text patterns
-      const readableText = text.match(/[A-Za-z0-9\s.,!?;:'"()-]{10,}/g)?.join(' ') || ''
-      
-      if (readableText.length > 50) {
-        console.log(`✅ Fallback extraction found ${readableText.length} characters`)
-        return `PDF document: ${filename}\n\nExtracted text (fallback method):\n${readableText.substring(0, 2000)}${readableText.length > 2000 ? '...' : ''}`
-      }
-    } catch (fallbackError) {
-      console.error('❌ Fallback extraction also failed:', fallbackError)
-    }
-    
-    return `PDF document: ${filename}. Text extraction failed. The document may be image-based or encrypted. Please try with a text-based PDF file.`
+    console.error('❌ PDF extraction failed:', error)
+    return `This is a PDF document titled "${filename}". The text extraction process encountered an error: ${error.message}`
   }
 }
 
