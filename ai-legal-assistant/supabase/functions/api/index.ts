@@ -33,7 +33,7 @@ class GeminiLLMService {
     }
   }
 
-  async generateText(prompt: string, maxTokens: number = 300, temperature: number = 0.7): Promise<string> {
+  async generateText(prompt: string, maxTokens: number = 1000, temperature: number = 0.7): Promise<string> {
     try {
       if (!this.apiKey || this.apiKey.length < 10) {
         console.error(`❌ Invalid or missing Gemini API key. Please check your environment variables.`)
@@ -227,10 +227,41 @@ class GeminiLLMService {
     }
   }
 
+  // Helper function to chunk text (like backend)
+  private chunkText(text: string, chunkSize: number = 800, overlap: number = 160): string[] {
+    if (!text || text.length === 0) {
+      return []
+    }
+    
+    console.log(`📝 Chunking text: ${text.length} chars, chunk_size=${chunkSize}, overlap=${overlap}`)
+    
+    // Split by words
+    const words = text.split(/\s+/)
+    const chunks: string[] = []
+    
+    // Create overlapping chunks
+    for (let i = 0; i < words.length; i += chunkSize - overlap) {
+      const chunk = words.slice(i, i + chunkSize).join(' ')
+      if (chunk.trim()) {
+        chunks.push(chunk.trim())
+      }
+    }
+    
+    console.log(`✅ Created ${chunks.length} chunks`)
+    return chunks
+  }
+
   async answerQuestion(question: string, context: string): Promise<any> {
     try {
       // Clean the document text first
-      const cleanedContext = this.cleanDocumentText(context)
+      let cleanedContext = this.cleanDocumentText(context)
+      
+      // Truncate context if too long (limit to 8000 chars to avoid token limits)
+      const MAX_CONTEXT_LENGTH = 8000
+      if (cleanedContext.length > MAX_CONTEXT_LENGTH) {
+        console.log(`⚠️ Context too long (${cleanedContext.length} chars), truncating to ${MAX_CONTEXT_LENGTH} chars`)
+        cleanedContext = cleanedContext.substring(0, MAX_CONTEXT_LENGTH) + '... [truncated]'
+      }
       
       // For Indian legal documents, use a specialized prompt
       const prompt = `You are an expert Indian legal assistant trained on Indian legal documents and laws. 
@@ -251,8 +282,8 @@ ANSWER (focusing on Indian legal context and terminology):`;
       console.log(`📝 Question: "${question.substring(0, 100)}${question.length > 100 ? '...' : ''}"`)
       console.log(`📄 Context length: ${cleanedContext.length} characters`)
       
-      // Use lower temperature for more factual responses, limited to 300 tokens
-      const answer = await this.generateText(prompt, 300, 0.1)
+      // Use lower temperature for more factual responses, increased to 1200 tokens like backend
+      const answer = await this.generateText(prompt, 1200, 0.1)
 
       return {
         answer: answer,
@@ -269,7 +300,14 @@ ANSWER (focusing on Indian legal context and terminology):`;
   async detectRisks(text: string): Promise<any> {
     try {
       // Clean the document text first
-      const cleanedText = this.cleanDocumentText(text)
+      let cleanedText = this.cleanDocumentText(text)
+      
+      // Truncate text if too long (limit to 8000 chars to avoid token limits)
+      const MAX_CONTEXT_LENGTH = 8000
+      if (cleanedText.length > MAX_CONTEXT_LENGTH) {
+        console.log(`⚠️ Document too long (${cleanedText.length} chars), truncating to ${MAX_CONTEXT_LENGTH} chars`)
+        cleanedText = cleanedText.substring(0, MAX_CONTEXT_LENGTH) + '... [truncated]'
+      }
       
       // For Indian legal documents, use a specialized prompt
       const prompt = `You are an Indian legal risk analysis expert specializing in Indian law, contracts, and legal documents.
@@ -303,8 +341,8 @@ RISK ANALYSIS:`;
 
       console.log(`📄 Document length for risk analysis: ${cleanedText.length} characters`)
       
-      // Use slightly higher temperature for more comprehensive analysis, limited to 300 tokens
-      const analysis = await this.generateText(prompt, 300, 0.2)
+      // Use slightly higher temperature for more comprehensive analysis, increased to 1000 tokens like backend
+      const analysis = await this.generateText(prompt, 1000, 0.1)
 
       return {
         analysis: analysis,
@@ -325,6 +363,30 @@ RISK ANALYSIS:`;
 
 // Initialize Gemini service
 const geminiService = new GeminiLLMService()
+
+// Helper function to chunk text (used outside GeminiLLMService)
+function chunkText(text: string, chunkSize: number = 800, overlap: number = 160): string[] {
+  if (!text || text.length === 0) {
+    return []
+  }
+  
+  console.log(`📝 Chunking text: ${text.length} chars, chunk_size=${chunkSize}, overlap=${overlap}`)
+  
+  // Split by words
+  const words = text.split(/\s+/)
+  const chunks: string[] = []
+  
+  // Create overlapping chunks
+  for (let i = 0; i < words.length; i += chunkSize - overlap) {
+    const chunk = words.slice(i, i + chunkSize).join(' ')
+    if (chunk.trim()) {
+      chunks.push(chunk.trim())
+    }
+  }
+  
+  console.log(`✅ Created ${chunks.length} chunks`)
+  return chunks
+}
 
 
 // PDF text extraction function with advanced filtering
@@ -675,8 +737,58 @@ serve(async (req) => {
 
         console.log(`📄 Answering question for document: ${document.title}`)
 
+        // Get relevant chunks (like backend does)
+        let context = document.extracted_text
+        
+        // Try to get chunks from document_chunks table if available
+        const { data: allChunks } = await supabase
+          .from('document_chunks')
+          .select('content, chunk_index')
+          .eq('document_id', document.id)
+          .order('chunk_index', { ascending: true })
+
+        if (allChunks && allChunks.length > 0) {
+          // Get first 15 chunks like backend semantic search
+          const baseChunks = allChunks.slice(0, 15)
+          
+          // Include adjacent chunks (±1) for better context
+          const candidateIndices = new Set<number>()
+          baseChunks.forEach(ch => {
+            candidateIndices.add(ch.chunk_index)
+            candidateIndices.add(ch.chunk_index - 1)
+            candidateIndices.add(ch.chunk_index + 1)
+          })
+          
+          // Get chunks with adjacent ones
+          const indices = Array.from(candidateIndices).filter(i => i >= 0).sort((a, b) => a - b)
+          const { data: selectedChunks } = await supabase
+            .from('document_chunks')
+            .select('content')
+            .eq('document_id', document.id)
+            .in('chunk_index', indices)
+            .order('chunk_index', { ascending: true })
+          
+          if (selectedChunks && selectedChunks.length > 0) {
+            // Join chunks and limit to ~3500 chars (like backend)
+            let joinedContext = selectedChunks.map(ch => ch.content).join('\n\n')
+            if (joinedContext.length > 3500) {
+              joinedContext = joinedContext.substring(0, 3500) + '...'
+            }
+            context = joinedContext
+            console.log(`📊 Using ${selectedChunks.length} chunks (including adjacent) for context (${context.length} chars)`)
+          } else {
+            // Fallback to first 10 chunks without adjacent
+            context = baseChunks.slice(0, 10).map(ch => ch.content).join('\n\n')
+            console.log(`📊 Using first 10 chunks for context (${context.length} chars)`)
+          }
+        } else {
+          // Fallback to first 3500 chars of extracted text (like backend)
+          context = document.extracted_text.substring(0, 3500)
+          console.log(`📊 Using truncated extracted text (${context.length} chars)`)
+        }
+
         // Use Gemini to answer the question
-        const result = await geminiService.answerQuestion(question, document.extracted_text)
+        const result = await geminiService.answerQuestion(question, context)
 
         // Save the question and answer to database
         const { error: qaError } = await supabase
@@ -807,8 +919,58 @@ serve(async (req) => {
 
         console.log(`📄 Answering free question for document: ${document.title}`)
 
+        // Get relevant chunks (like backend does)
+        let context = document.extracted_text
+        
+        // Try to get chunks from document_chunks table if available
+        const { data: allChunks } = await supabase
+          .from('document_chunks')
+          .select('content, chunk_index')
+          .eq('document_id', document.id)
+          .order('chunk_index', { ascending: true })
+
+        if (allChunks && allChunks.length > 0) {
+          // Get first 15 chunks like backend semantic search
+          const baseChunks = allChunks.slice(0, 15)
+          
+          // Include adjacent chunks (±1) for better context
+          const candidateIndices = new Set<number>()
+          baseChunks.forEach(ch => {
+            candidateIndices.add(ch.chunk_index)
+            candidateIndices.add(ch.chunk_index - 1)
+            candidateIndices.add(ch.chunk_index + 1)
+          })
+          
+          // Get chunks with adjacent ones
+          const indices = Array.from(candidateIndices).filter(i => i >= 0).sort((a, b) => a - b)
+          const { data: selectedChunks } = await supabase
+            .from('document_chunks')
+            .select('content')
+            .eq('document_id', document.id)
+            .in('chunk_index', indices)
+            .order('chunk_index', { ascending: true })
+          
+          if (selectedChunks && selectedChunks.length > 0) {
+            // Join chunks and limit to ~3500 chars (like backend)
+            let joinedContext = selectedChunks.map(ch => ch.content).join('\n\n')
+            if (joinedContext.length > 3500) {
+              joinedContext = joinedContext.substring(0, 3500) + '...'
+            }
+            context = joinedContext
+            console.log(`📊 Using ${selectedChunks.length} chunks (including adjacent) for context (${context.length} chars)`)
+          } else {
+            // Fallback to first 10 chunks without adjacent
+            context = baseChunks.slice(0, 10).map(ch => ch.content).join('\n\n')
+            console.log(`📊 Using first 10 chunks for context (${context.length} chars)`)
+          }
+        } else {
+          // Fallback to first 3500 chars of extracted text (like backend)
+          context = document.extracted_text.substring(0, 3500)
+          console.log(`📊 Using truncated extracted text (${context.length} chars)`)
+        }
+
         // Use Gemini to answer the question
-        const result = await geminiService.answerQuestion(question, document.extracted_text)
+        const result = await geminiService.answerQuestion(question, context)
 
         // Save the question and answer to database
         const { error: qaError } = await supabase
@@ -1466,6 +1628,31 @@ serve(async (req) => {
 
           console.log(`✅ Document created with ID: ${document.id}`)
           console.log('✅ Document already marked as processed')
+
+          // Create document chunks
+          console.log('📦 Creating document chunks...')
+          const chunks = chunkText(extractedText, 800, 160)
+          
+          if (chunks.length > 0) {
+            const chunkRecords = chunks.map((content, index) => ({
+              document_id: document.id,
+              chunk_index: index,
+              content: content,
+              word_count: content.split(' ').length,
+              character_count: content.length
+            }))
+            
+            const { error: chunkError } = await supabase
+              .from('document_chunks')
+              .insert(chunkRecords)
+            
+            if (chunkError) {
+              console.error('⚠️ Failed to create chunks:', chunkError)
+              // Don't fail the upload if chunk creation fails
+            } else {
+              console.log(`✅ Created ${chunks.length} chunks for document ${document.id}`)
+            }
+          }
 
           console.log(`🎉 Upload completed successfully! Document ID: ${document.id}`)
       
