@@ -1385,18 +1385,107 @@ serve(async (req) => {
     // QA Sessions - create/list
     if (path === '/qa/sessions') {
       if (method === 'GET') {
+        // List all sessions for the current user
+        try {
+          const { data: sessions, error } = await supabase
+            .from('qa_sessions')
+            .select('*, documents(id, title, original_filename, file_size, mime_type, created_at)')
+            .order('created_at', { ascending: false })
+          
+          if (error) {
+            console.error('Error fetching sessions:', error)
+            return new Response(
+              JSON.stringify({ error: 'Failed to fetch sessions', details: error.message }),
+              { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+            )
+          }
+          
+          return new Response(
+            JSON.stringify(sessions || []),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
+          )
+        } catch (e) {
+          return new Response(
+            JSON.stringify({ error: 'Failed to fetch sessions', details: String(e) }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+          )
+        }
+      }
+      
+      // POST create session
+      try {
+        const payload = await req.json()
+        const document_id = payload.document_id ? Number(payload.document_id) : null
+        
+        if (!document_id) {
+          return new Response(
+            JSON.stringify({ error: 'document_id is required' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+          )
+        }
+        
+        // Get or create free user
+        let userId = 1
+        const { data: existingUser } = await supabase
+          .from('users')
+          .select('id')
+          .eq('email', 'free@system.local')
+          .single()
+        if (existingUser) userId = existingUser.id
+        
+        // Verify document exists and is processed
+        const { data: doc, error: docError } = await supabase
+          .from('documents')
+          .select('id, title, is_processed')
+          .eq('id', document_id)
+          .single()
+        
+        if (docError || !doc) {
+          return new Response(
+            JSON.stringify({ error: 'Document not found' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 404 }
+          )
+        }
+        
+        if (!doc.is_processed) {
+          return new Response(
+            JSON.stringify({ error: 'Document is still being processed' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+          )
+        }
+        
+        // Create session
+        const { data: session, error } = await supabase
+          .from('qa_sessions')
+          .insert({
+            user_id: userId,
+            document_id: document_id,
+            session_name: payload.session_name || `Q&A - ${doc.title}`,
+            is_active: true,
+            total_questions: 0
+          })
+          .select()
+          .single()
+        
+        if (error || !session) {
+          console.error('Session creation error:', error)
+          return new Response(
+            JSON.stringify({ error: 'Failed to create session', details: error?.message }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+          )
+        }
+        
         return new Response(
-          JSON.stringify([]),
+          JSON.stringify(session),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
         )
+      } catch (e) {
+        console.error('Session creation error:', e)
+        return new Response(
+          JSON.stringify({ error: 'Failed to create session', details: String(e) }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+        )
       }
-      // POST create
-      const payload = await req.json()
-      const session_id = Date.now()
-      return new Response(
-        JSON.stringify({ session_id, session_name: payload.session_name ?? null, document_id: payload.document_id ?? null }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
-      )
     }
 
     // QA Sessions - detail/delete/cleanup/questions
@@ -1404,22 +1493,218 @@ serve(async (req) => {
     if (qaSessionMatch) {
       const sessionId = Number(qaSessionMatch[1])
       const subPath = qaSessionMatch[2]
+      
+      // GET session details
       if (!subPath && method === 'GET') {
+        try {
+          const { data: session, error } = await supabase
+            .from('qa_sessions')
+            .select('*, documents(id, title, original_filename, file_size, mime_type, created_at)')
+            .eq('id', sessionId)
+            .single()
+          
+          if (error || !session) {
+            return new Response(
+              JSON.stringify({ error: 'Session not found' }),
+              { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 404 }
+            )
+          }
+          
+          return new Response(
+            JSON.stringify(session),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
+          )
+        } catch (e) {
+          return new Response(
+            JSON.stringify({ error: 'Failed to fetch session', details: String(e) }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+          )
+        }
+      }
+      
+      // DELETE session with cascade
+      if (!subPath && method === 'DELETE') {
+        try {
+          // Get session to find document
+          const { data: session } = await supabase
+            .from('qa_sessions')
+            .select('document_id')
+            .eq('id', sessionId)
+            .single()
+          
+          if (!session) {
+            return new Response(
+              JSON.stringify({ error: 'Session not found' }),
+              { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 404 }
+            )
+          }
+          
+          // Delete QA questions first
+          await supabase
+            .from('qa_questions')
+            .delete()
+            .eq('session_id', sessionId)
+          
+          // Delete session
+          await supabase
+            .from('qa_sessions')
+            .delete()
+            .eq('id', sessionId)
+          
+          // Delete document chunks
+          await supabase
+            .from('document_chunks')
+            .delete()
+            .eq('document_id', session.document_id)
+          
+          // Delete risk analyses
+          await supabase
+            .from('risk_analyses')
+            .delete()
+            .eq('document_id', session.document_id)
+          
+          // Get document to delete from storage
+          const { data: document } = await supabase
+            .from('documents')
+            .select('supabase_path')
+            .eq('id', session.document_id)
+            .single()
+          
+          // Delete from storage
+          if (document && document.supabase_path) {
+            try {
+              await supabase.storage
+                .from('legal-assistant')
+                .remove([document.supabase_path])
+            } catch (storageError) {
+              console.warn('Failed to delete from storage:', storageError)
+            }
+          }
+          
+          // Delete document record
+          await supabase
+            .from('documents')
+            .delete()
+            .eq('id', session.document_id)
+          
+          return new Response(
+            JSON.stringify({ message: 'Session, document, and related data deleted successfully' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
+          )
+        } catch (e) {
+          console.error('Delete session error:', e)
+          return new Response(
+            JSON.stringify({ error: 'Failed to delete session', details: String(e) }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+          )
+        }
+      }
+      
+      // POST cleanup session
+      if (subPath === 'cleanup' && method === 'POST') {
+        try {
+          // Same as DELETE but without removing the session itself
+          const { data: session } = await supabase
+            .from('qa_sessions')
+            .select('document_id')
+            .eq('id', sessionId)
+            .single()
+          
+          if (!session) {
+            return new Response(
+              JSON.stringify({ error: 'Session not found' }),
+              { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 404 }
+            )
+          }
+          
+          // Delete QA questions
+          await supabase
+            .from('qa_questions')
+            .delete()
+            .eq('session_id', sessionId)
+          
+          // Reset session stats
+          await supabase
+            .from('qa_sessions')
+            .update({ total_questions: 0 })
+            .eq('id', sessionId)
+          
+          return new Response(
+            JSON.stringify({ message: 'Session cleaned up successfully' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
+          )
+        } catch (e) {
+          return new Response(
+            JSON.stringify({ error: 'Failed to cleanup session', details: String(e) }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+          )
+        }
+      }
+      
+      // GET session questions
+      if (subPath === 'questions' && method === 'GET') {
+        try {
+          const { data: questions, error } = await supabase
+            .from('qa_questions')
+            .select('*')
+            .eq('session_id', sessionId)
+            .order('created_at', { ascending: true })
+          
+          if (error) {
+            return new Response(
+              JSON.stringify({ error: 'Failed to fetch questions', details: error.message }),
+              { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+            )
+          }
+          
+          return new Response(
+            JSON.stringify(questions || []),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
+          )
+        } catch (e) {
+          return new Response(
+            JSON.stringify({ error: 'Failed to fetch questions', details: String(e) }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+          )
+        }
+      }
+      
+      return new Response(JSON.stringify({ error: 'Method Not Allowed' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 405 })
+    }
+
+    // QA Question feedback
+    const qaFeedbackMatch = path.match(/^\/qa\/questions\/(\d+)\/feedback$/)
+    if (qaFeedbackMatch && method === 'PUT') {
+      try {
+        const questionId = Number(qaFeedbackMatch[1])
+        const payload = await req.json()
+        
+        const { error } = await supabase
+          .from('qa_questions')
+          .update({
+            is_helpful: payload.is_helpful,
+            user_rating: payload.rating || null,
+            feedback: payload.feedback || null
+          })
+          .eq('id', questionId)
+        
+        if (error) {
+          return new Response(
+            JSON.stringify({ error: 'Failed to record feedback', details: error.message }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+          )
+        }
+        
         return new Response(
-          JSON.stringify({ session_id: sessionId, session_name: 'Session', document_id: 1 }),
+          JSON.stringify({ message: 'Feedback recorded successfully' }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
         )
+      } catch (e) {
+        return new Response(
+          JSON.stringify({ error: 'Failed to record feedback', details: String(e) }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+        )
       }
-      if (!subPath && method === 'DELETE') {
-        return new Response(JSON.stringify({ message: 'Session deleted' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
-      }
-      if (subPath === 'cleanup' && method === 'POST') {
-        return new Response(JSON.stringify({ message: 'Session cleaned' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
-      }
-      if (subPath === 'questions' && method === 'GET') {
-        return new Response(JSON.stringify([]), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 })
-      }
-      return new Response(JSON.stringify({ error: 'Method Not Allowed' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 405 })
     }
 
     // Documents upload metadata (after client uploads to Supabase storage)
