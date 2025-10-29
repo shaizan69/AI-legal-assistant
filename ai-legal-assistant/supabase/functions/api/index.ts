@@ -33,7 +33,7 @@ class GeminiLLMService {
     }
   }
 
-  async generateText(prompt: string, maxTokens: number = 1000, temperature: number = 0.7): Promise<string> {
+  async generateText(prompt: string, maxTokens: number = 2000, temperature: number = 0.7): Promise<string> {
     try {
       if (!this.apiKey || this.apiKey.length < 10) {
         console.error(`❌ Invalid or missing Gemini API key. Please check your environment variables.`)
@@ -41,7 +41,8 @@ class GeminiLLMService {
       }
       
       console.log(`🤖 Generating text with Gemini (${this.modelName})...`)
-      console.log(`📝 Prompt length: ${prompt.length} characters`)
+      console.log(`📝 Prompt length: ${prompt.length} characters (~${Math.ceil(prompt.length / 4)} tokens)`)
+      console.log(`🎯 Max output tokens requested: ${maxTokens}`)
 
       // Using the same structure as the backend Python SDK
       const requestBody = {
@@ -121,6 +122,14 @@ class GeminiLLMService {
       // Debug the response structure but limit the output size
       const dataStr = JSON.stringify(data);
       console.log(`📊 Gemini response structure:`, dataStr.substring(0, 500) + (dataStr.length > 500 ? '...' : ''))
+      
+      // Log token usage if available
+      if (data.usageMetadata) {
+        console.log(`📈 Token usage: Prompt=${data.usageMetadata.promptTokenCount}, Output=${data.usageMetadata.candidatesTokenCount}, Total=${data.usageMetadata.totalTokenCount}`)
+        if (data.usageMetadata.candidatesTokenCount >= maxTokens * 0.95) {
+          console.warn(`⚠️ Output tokens (${data.usageMetadata.candidatesTokenCount}) near limit (${maxTokens}). Consider increasing maxTokens.`)
+        }
+      }
 
       // Validate response structure - handle both old and new Gemini API formats
       if (data.candidates && Array.isArray(data.candidates) && data.candidates.length > 0) {
@@ -256,163 +265,69 @@ class GeminiLLMService {
       // Clean the document text first
       let cleanedContext = this.cleanDocumentText(context)
       
-      // Truncate context if too long (limit to 8000 chars to avoid token limits)
-      const MAX_CONTEXT_LENGTH = 8000
+      // Truncate context if too long (reduced to leave more room for output)
+      const MAX_CONTEXT_LENGTH = 5000  // Reduced from 8000 to allow longer responses
       if (cleanedContext.length > MAX_CONTEXT_LENGTH) {
         console.log(`⚠️ Context too long (${cleanedContext.length} chars), truncating to ${MAX_CONTEXT_LENGTH} chars`)
         cleanedContext = cleanedContext.substring(0, MAX_CONTEXT_LENGTH) + '... [truncated]'
       }
       
-      // Use comprehensive backend-style prompt
-      const prompt = `You are an expert legal AI assistant with specialized knowledge in financial and monetary analysis. Your task is to provide accurate, precise, and helpful answers based on the provided legal document context.
+      // Use optimized backend-style prompt (more concise to save tokens)
+      const prompt = `You are an expert legal AI assistant specializing in financial analysis. Answer based ONLY on the provided context.
 
-IMPORTANT INSTRUCTIONS:
-1. Answer ONLY based on the provided context - do not add external legal knowledge
-2. NEVER say "No monetary figure is present" or "The excerpt contains only..." - ALWAYS read the actual context provided
-3. If the context doesn't contain enough information to answer fully, say so explicitly
-4. Quote specific sections, clauses, or paragraphs when relevant
-5. Use precise legal terminology from the document
-6. If there are multiple relevant sections, organize your answer clearly
-7. Be concise but comprehensive
-8. If the question is unclear or ambiguous, ask for clarification
-9. CRITICAL: Always analyze the actual context provided, not generic responses
+CORE RULES:
+1. Answer from context only - no external knowledge
+2. ALWAYS read the actual context - never say "no monetary figures present" if amounts exist
+3. Quote relevant sections when applicable
+4. Be precise and comprehensive
 
-ENHANCED MONEY-RELATED QUERY HANDLING:
-When users ask about money, costs, payments, fees, or financial terms, you should:
+FINANCIAL ANALYSIS:
+If "=== COMPREHENSIVE FINANCIAL ANALYSIS ===" appears, use it as PRIMARY source. It contains:
+- MONETARY AMOUNTS with context
+- PAYMENT SCHEDULES
+- FINANCIAL TERMS
+- TABLES data
+- CALCULATIONS
+Prioritize this over narrative text.
 
-**COMPREHENSIVE FINANCIAL ANALYSIS PROCESSING:**
-- If you see "=== COMPREHENSIVE FINANCIAL ANALYSIS ===" in the context, this contains pre-extracted financial data
-- Use this analysis section as your PRIMARY source for financial information
-- The analysis includes:
-  * MONETARY AMOUNTS FOUND: All detected amounts with their surrounding context
-  * PAYMENT SCHEDULES FOUND: Structured payment plans and schedules
-  * FINANCIAL TERMS FOUND: All financial terminology with amounts
-  * TABLES FOUND: Structured tabular data with headers and rows
-  * CALCULATIONS FOUND: Mathematical calculations and totals
-- ALWAYS prioritize information from the financial analysis section over narrative text
-- Cross-reference analysis data with document content for complete understanding
+AMOUNT IDENTIFICATION:
+- Find ALL monetary values: $, USD/EUR/INR, Indian format (/- e.g. 187,450/-)
+- Identify: fees, payments, penalties, deposits, installments, taxes
+- ALWAYS read context around amounts to understand what/when/who/why
 
-**AMOUNT IDENTIFICATION & CONTEXT LEARNING:**
-- Identify ALL monetary values, fees, costs, payments, and financial obligations
-- Look for dollar signs ($), currency codes (USD, EUR, GBP, etc.), Indian currency format (/-), and written amounts
-- **INDIAN CURRENCY FORMATS**: Pay special attention to amounts ending with /- (e.g., 187,450/-, 749,800/-)
-- **PROPERTY-SPECIFIC AMOUNTS**: Look for down payments, installments, maintenance charges, registration fees, stamp duty, brokerage, security deposits, possession penalties, construction milestones
-- Distinguish between different types of amounts (base fees, additional charges, penalties, etc.)
-- **CRITICAL**: Read the surrounding words and sentences around each amount to understand:
-  * What the amount refers to (payment, fee, penalty, refund, etc.)
-  * When the amount is due or applicable
-  * Who is responsible for paying or receiving the amount
-  * What conditions apply to the amount
-  * How the amount is calculated or determined
+KEY ANALYSIS:
+- Payment schedules, due dates, penalties
+- Cost breakdowns and hidden fees
+- Financial obligations and liabilities
+- Currency and calculations
+- Table data extraction when present
 
-**PAYMENT ANALYSIS:**
-- Analyze payment schedules, due dates, and payment methods
-- Identify late payment penalties, interest rates, and grace periods
-- Note installment plans, milestones, and payment conditions
-- **LEARN FROM CONTEXT**: Understand the payment structure by reading surrounding text
-
-**COST BREAKDOWN:**
-- Segregate and categorize all charges, fees, taxes, and surcharges
-- Identify service fees, administrative fees, processing fees, and hidden costs
-- Calculate totals when multiple amounts are mentioned
-- **CONTEXT AWARENESS**: Use surrounding text to understand what each cost covers
-
-**FINANCIAL OBLIGATIONS:**
-- Track all financial responsibilities and liabilities
-- Note refund policies, cancellation fees, and termination costs
-- Identify financial penalties, liquidated damages, and breach costs
-- **LEARN RELATIONSHIPS**: Understand how different amounts relate to each other
-
-**CURRENCY & EXCHANGE:**
-- Note different currencies and exchange rate provisions
-- Identify currency fluctuation risks and conversion terms
-- **CONTEXT MATTERS**: Understand currency context from surrounding text
-
-**FINANCIAL CALCULATIONS:**
-- Perform basic calculations when amounts are specified
-- Calculate percentages, interest, and compound amounts
-- Identify escalation clauses and price adjustment mechanisms
-- **LEARN FORMULAS**: Understand calculation methods from document context
-
-**CONTEXT LEARNING APPROACH:**
-- For each amount found, read 2-3 sentences before and after to understand context
-- Identify the purpose, timing, and conditions of each financial term
-- Learn the relationships between different financial elements
-- Use this learned context to provide comprehensive answers
-- If amounts are at the end of documents, pay special attention to summary sections
-
-**DATA EXTRACTION REQUIREMENTS:**
-- Extract specific values from tables and reference them accurately
-- If asked about table contents, provide detailed breakdown of all relevant information
-- Calculate totals, subtotals, and percentages from data when relevant
-- Present information in clear, readable format without markdown tables
-
-**STRUCTURED DATA PROCESSING:**
-- When you see "TABLES FOUND" in the financial analysis, use this structured data
-- Process table headers and rows systematically
-- Extract relationships between different financial elements
-- Use table data to answer specific questions about amounts, schedules, and calculations
+For money questions: provide exact figures with context, payment terms, all fees, and calculations.
 
 LEGAL DOCUMENT CONTEXT (read strictly):
 ${cleanedContext}
 
 USER QUESTION: ${question}
 
-CRITICAL REMINDER:
-- The context above contains the actual document content AND comprehensive financial analysis
-- You MUST analyze this specific context, not give generic responses
-- Look for amounts like 187,450/-, 749,800/-, 221,191/-, 884,764/-, etc.
-- If you see amounts in the context, report them with their context
-- Do NOT say "no amounts found" if amounts are clearly present in the context
-- PRIORITIZE the financial analysis section when available
+IMPORTANT:
+- Analyze THIS specific context, not generic responses
+- If amounts exist (e.g., 187,450/-), ALWAYS report them
+- Prioritize "=== COMPREHENSIVE FINANCIAL ANALYSIS ===" section if present
+- Use "TABLE DATA:" section for structured information
 
-IF CONTEXT CONTAINS A SECTION STARTING WITH "=== COMPREHENSIVE FINANCIAL ANALYSIS ===":
-- This is your PRIMARY source for financial information
-- Use the pre-extracted amounts, schedules, terms, tables, and calculations
-- Cross-reference with document content for complete understanding
-- Provide answers based on this structured analysis
-
-IF CONTEXT CONTAINS A SECTION STARTING WITH "TABLE DATA:":
-- Treat it as authoritative structured data for answering table/schedule questions
-- Prioritize extracting directly from this data before reading narrative text
-- For payment schedule questions, provide a clear breakdown of stages and amounts in paragraph format
-
-RESPONSE GUIDELINES:
-- Start with a direct answer if possible
-- For money-related questions, provide specific figures, calculations, and currencies
-- Cite specific document sections (e.g., "According to Section 3.2...")
-- **DO NOT mention chunk numbers or references to specific chunks**
-- If multiple sections are relevant, organize by topic
-- **COMPREHENSIVE FINANCIAL ANALYSIS REQUIREMENTS:**
-  * Use the financial analysis section as your primary source
-  * Reference specific amounts with their context from the analysis
-  * Explain relationships between different financial elements
-  * Show understanding of payment structures and schedules
-  * Demonstrate awareness of all financial obligations and terms
-- For financial queries, always include:
-  * Exact amounts and currencies with context explanation
-  * Payment terms and schedules with surrounding conditions
-  * All applicable fees and charges with their purposes
-  * Financial obligations and liabilities with their triggers
-  * Any hidden or additional costs with their conditions
-  * Relevant calculations or formulas with their basis
-  * Context about when and why each amount applies
-- Use clear formatting for financial information (bullet points, numbered lists when appropriate)
-- **CLEAR FORMATTING**: When monetary information is structured in the document, present your answer in clear, readable format with:
-  * Bullet points or numbered lists for easy reading
-  * Consistent amount formatting (e.g., 187,450/-, 749,800/-)
-  * All relevant data from the original information
-- **STRUCTURED ANALYSIS APPROACH**: Demonstrate that you understand the comprehensive financial analysis
-- **NEVER GIVE GENERIC RESPONSES**: Always analyze the actual context provided above
-- End with "If you need clarification on any specific aspect, please let me know."
+FORMAT:
+- Direct answer first
+- Cite sections (e.g., "Section 3.2 states...")
+- For financial data: use bullets, show all amounts/fees/calculations
+- End with: "If you need clarification on any specific aspect, please let me know."
 
 ANSWER:`;
 
       console.log(`📝 Question: "${question.substring(0, 100)}${question.length > 100 ? '...' : ''}"`)
       console.log(`📄 Context length: ${cleanedContext.length} characters`)
       
-      // Use lower temperature for more factual responses, increased token limit for longer answers
-      const answer = await this.generateText(prompt, 3000, 0.1)
+      // Use lower temperature for more factual responses, increased token limit to prevent cutoffs
+      const answer = await this.generateText(prompt, 6000, 0.1)  // Increased from 3000 to use Gemini's 8K output limit
 
       return {
         answer: answer,
@@ -431,54 +346,86 @@ ANSWER:`;
       // Clean the document text first
       let cleanedText = this.cleanDocumentText(text)
       
-      // Truncate text if too long (limit to 8000 chars to avoid token limits)
-      const MAX_CONTEXT_LENGTH = 8000
+      // Truncate text if too long (reduced to leave more room for output)
+      const MAX_CONTEXT_LENGTH = 5000  // Reduced from 8000 to allow longer responses
       if (cleanedText.length > MAX_CONTEXT_LENGTH) {
         console.log(`⚠️ Document too long (${cleanedText.length} chars), truncating to ${MAX_CONTEXT_LENGTH} chars`)
         cleanedText = cleanedText.substring(0, MAX_CONTEXT_LENGTH) + '... [truncated]'
       }
       
-      // For Indian legal documents, use a specialized prompt
-      const prompt = `You are an Indian legal risk analysis expert specializing in Indian law, contracts, and legal documents.
-Analyze the following Indian legal document for potential risks in the Indian legal context.
+      // Use comprehensive backend-style prompt for risk analysis
+      const prompt = `You are an expert legal risk analyst. Analyze the following legal document for potential legal risks, compliance issues, and areas of concern.
 
-DOCUMENT (Indian legal context):
+DOCUMENT TO ANALYZE:
 """
 ${cleanedText}
 """
 
-Provide a structured risk analysis with:
-1. Overall Risk Level (HIGH/MEDIUM/LOW)
-2. Risk Categories (Contractual, Compliance, Financial, Operational, Legal)
-3. Specific risks identified under Indian law and legal practice
-4. Impact assessment considering Indian legal framework
-5. Recommendations for risk mitigation in the Indian legal context
+COMPREHENSIVE RISK ANALYSIS REQUIRED:
 
-Consider Indian legal principles, statutes, and case law where relevant, including:
-- Indian Contract Act, 1872
-- Specific Relief Act, 1963
-- Registration Act, 1908
-- Transfer of Property Act, 1882
-- Indian Stamp Act, 1899
-- Real Estate (Regulation and Development) Act, 2016 (RERA)
-- Indian Evidence Act, 1872
-- Relevant state-specific laws
+1. **CONTRACTUAL RISKS:**
+   - Unfavorable terms and conditions
+   - Ambiguous language or definitions
+   - Missing essential clauses
+   - Unbalanced obligations
+   - Termination clauses issues
 
-If the document doesn't contain enough information or doesn't appear to be a legal document, please state this clearly.
+2. **COMPLIANCE RISKS:**
+   - Regulatory violations
+   - Industry-specific compliance issues
+   - Data protection concerns (GDPR, CCPA, etc.)
+   - Employment law violations
+   - Tax implications
+
+3. **FINANCIAL RISKS:**
+   - Payment terms issues and late payment penalties
+   - Liability limitations and financial exposures
+   - Indemnification clauses and financial obligations
+   - Force majeure provisions affecting payments
+   - Currency and exchange rate risks
+   - Hidden charges and unexpected fees
+   - Escalation clauses and price increases
+   - Financial penalties and liquidated damages
+   - Refund and cancellation policies
+   - Payment security and guarantees
+
+4. **OPERATIONAL RISKS:**
+   - Performance obligations
+   - Delivery timelines
+   - Quality standards
+   - Intellectual property concerns
+   - Confidentiality breaches
+
+5. **LEGAL ENFORCEABILITY:**
+   - Jurisdiction and governing law
+   - Dispute resolution mechanisms
+   - Statute of limitations
+   - Legal capacity issues
+   - Consideration adequacy
+
+RISK ANALYSIS FORMAT:
+- **Risk Level**: HIGH/MEDIUM/LOW
+- **Risk Category**: [Contractual/Compliance/Financial/Operational/Legal]
+- **Specific Risk**: [Detailed description]
+- **Impact**: [Potential consequences]
+- **Recommendation**: [Specific action to mitigate]
+- **Relevant Section**: [Quote specific document section]
+
+Provide a structured analysis with specific examples from the document. If no significant risks are found, state that clearly.
 
 RISK ANALYSIS:`;
 
       console.log(`📄 Document length for risk analysis: ${cleanedText.length} characters`)
       
-      // Use slightly higher temperature for more comprehensive analysis, increased to 1000 tokens like backend
-      const analysis = await this.generateText(prompt, 1000, 0.1)
+      // Use slightly higher temperature for more comprehensive analysis, increased tokens to prevent cutoffs
+      const analysis = await this.generateText(prompt, 3000, 0.1)  // Increased from 1000 to allow complete analysis
 
       return {
         analysis: analysis,
         risk_level: "Medium", // This is a placeholder, ideally would be extracted from the analysis
         risk_factors: [analysis],
-        recommendations: ["Review with Indian legal expert"],
-        document_type: "Indian legal document",
+        recommendations: ["Review with legal expert"],
+        document_type: "legal",
         analysis_date: new Date().toISOString(),
         model_used: this.modelName,
         confidence: 0.9
