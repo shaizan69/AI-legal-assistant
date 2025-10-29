@@ -411,8 +411,8 @@ ANSWER:`;
       console.log(`📝 Question: "${question.substring(0, 100)}${question.length > 100 ? '...' : ''}"`)
       console.log(`📄 Context length: ${cleanedContext.length} characters`)
       
-      // Use lower temperature for more factual responses, increased to 1200 tokens like backend
-      const answer = await this.generateText(prompt, 1200, 0.1)
+      // Use lower temperature for more factual responses, increased token limit for longer answers
+      const answer = await this.generateText(prompt, 3000, 0.1)
 
       return {
         answer: answer,
@@ -493,6 +493,363 @@ RISK ANALYSIS:`;
 // Initialize Gemini service
 const geminiService = new GeminiLLMService()
 
+// ============================================================================
+// FINANCIAL ANALYSIS UTILITIES
+// ============================================================================
+
+// Comprehensive money keywords for financial query detection
+const MONEY_KEYWORDS = [
+  'cost', 'price', 'amount', 'fee', 'payment', 'charge', 'total', 'sum', 'dollar', 'money', 
+  'financial', 'budget', 'expense', 'revenue', 'income', 'salary', 'wage', 'bonus', 'penalty', 
+  'fine', 'refund', 'deposit', 'advance', 'installment', 'interest', 'tax', 'commission', 
+  'royalty', 'rent', 'lease', 'purchase', 'sale', 'value', 'worth', 'expensive', 'cheap', 
+  'affordable', 'costly', 'free', 'paid', 'unpaid', 'due', 'overdue', 'billing', 'invoice', 
+  'receipt', 'receivable', 'payable', 'debt', 'credit', 'loan', 'mortgage', 'investment', 
+  'profit', 'loss', 'earnings', 'compensation', 'benefits', 'allowance', 'stipend', 'pension', 
+  'retirement', 'insurance', 'premium', 'deductible', 'coverage', 'claim', 'settlement', 
+  'award', 'damages', 'restitution', 'reimbursement', 'subsidy', 'grant', 'funding', 
+  'sponsorship', 'endorsement', 'licensing', 'franchise', 'dividend', 'share', 'stock', 
+  'bond', 'security', 'asset', 'liability', 'equity', 'capital', 'fund', 'treasury', 
+  'forecast', 'projection', 'estimate', 'quotation', 'proposal', 'bid', 'tender', 'contract', 
+  'agreement', 'deal', 'transaction', 'exchange', 'trade', 'commerce', 'business', 'enterprise', 
+  'corporation', 'company', 'firm', 'partnership', 'llc', 'inc', 'corp', 'ltd', 'llp', 'pllc', 
+  'pc', 'pa', 'rs.', 'inr', 'rupees', '$', 'usd', 'eur', '₹'
+]
+
+// Payment schedule keywords
+const SCHEDULE_KEYWORDS = [
+  'payment schedule', 'installment', 'instalment', 'milestone', 'stage of work',
+  'schedule of payment', 'plan of payment', 'payment plan', 'due on', 'on possession',
+  'on booking', 'on agreement', 'slab'
+]
+
+// Check if question is money-related
+function isMoneyRelated(question: string): boolean {
+  const qLower = question.toLowerCase()
+  return MONEY_KEYWORDS.some(keyword => qLower.includes(keyword))
+}
+
+// Check if question is about payment schedule
+function isScheduleQuery(question: string): boolean {
+  const qLower = question.toLowerCase()
+  return SCHEDULE_KEYWORDS.some(keyword => qLower.includes(keyword))
+}
+
+// Multi-pass financial analysis (TypeScript version of backend function)
+interface FinancialAnalysis {
+  amounts: Array<{amount: string, position: number, context: string, pattern_type: string}>
+  currencies: string[]
+  payment_schedules: Array<{text: string, position: number, type: string}>
+  financial_terms: Array<{term: string, position: number, type: string}>
+  tables: Array<{headers: string[], rows: any[], type: string}>
+  calculations: Array<{calculation: string, position: number, type: string}>
+  contexts: Record<string, any>
+}
+
+function multiPassFinancialAnalysis(text: string): FinancialAnalysis {
+  const analysis: FinancialAnalysis = {
+    amounts: [],
+    currencies: [],
+    payment_schedules: [],
+    financial_terms: [],
+    tables: [],
+    calculations: [],
+    contexts: {}
+  }
+
+  // Pass 1: Extract all monetary amounts with context
+  const amountPatterns = [
+    /[\d,]+(?:\.\d{2})?\/-/g,  // Indian currency
+    /\$[\d,]+(?:\.\d{2})?/g,  // USD
+    /[\d,]+(?:\.\d{2})?\s*(?:USD|EUR|GBP|CAD|AUD|JPY|CHF|CNY|INR)/gi,  // Currency codes
+    /[\d,]+(?:\.\d{2})?\s*rupees?/gi,  // Written rupees
+    /[\d,]+(?:\.\d{2})?\s*rs\.?/gi,  // Rs abbreviation
+    /[\d,]+(?:\.\d{2})?\s*₹/g,  // Rupee symbol
+  ]
+
+  for (const pattern of amountPatterns) {
+    const matches = [...text.matchAll(pattern)]
+    for (const match of matches) {
+      const amount = match[0]
+      const start = match.index || 0
+      const end = start + amount.length
+      
+      // Extract context around the amount (50 chars before and after)
+      const contextStart = Math.max(0, start - 50)
+      const contextEnd = Math.min(text.length, end + 50)
+      const context = text.substring(contextStart, contextEnd)
+      
+      analysis.amounts.push({
+        amount,
+        position: start,
+        context,
+        pattern_type: 'currency'
+      })
+    }
+  }
+
+  // Pass 2: Extract payment schedules
+  const schedulePatterns = [
+    /(?:payment\s+schedule|installment\s+plan|payment\s+plan)[\s\S]*?(?=\n\s*\n|\n\s*[A-Z]|$)/gi,
+    /(?:monthly|quarterly|annual)\s+installment[\s\S]*?(?=\n\s*\n|\n\s*[A-Z]|$)/gi,
+    /(?:down\s+payment|advance\s+payment)[\s\S]*?(?=\n\s*\n|\n\s*[A-Z]|$)/gi,
+  ]
+
+  for (const pattern of schedulePatterns) {
+    const matches = [...text.matchAll(pattern)]
+    for (const match of matches) {
+      const scheduleText = match[0]
+      analysis.payment_schedules.push({
+        text: scheduleText,
+        position: match.index || 0,
+        type: 'payment_schedule'
+      })
+    }
+  }
+
+  // Pass 3: Extract financial terms with amounts
+  const financialTermPattern = /(?:payment|fee|cost|charge|price|amount|total|sum|value|worth|budget|expense|revenue|income)\s*:?\s*[\d,]+(?:\.\d{2})?/gi
+  
+  const termMatches = [...text.matchAll(financialTermPattern)]
+  for (const match of termMatches) {
+    analysis.financial_terms.push({
+      term: match[0],
+      position: match.index || 0,
+      type: 'financial_term'
+    })
+  }
+
+  // Pass 4: Extract tables (simplified - detect table-like structures)
+  const lines = text.split('\n')
+  const tables: Array<{headers: string[], rows: any[], type: string}> = []
+  let currentTable: {headers: string[], rows: any[], type: string} | null = null
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim()
+    if (!line) continue
+
+    // Check if line looks like table header
+    const columns = line.split(/\s{2,}|\t+/)
+    if (columns.length >= 2 && (line.toLowerCase().includes('amount') || line.toLowerCase().includes('price') || line.toLowerCase().includes('payment'))) {
+      if (currentTable) {
+        tables.push(currentTable)
+      }
+      currentTable = {
+        headers: columns.map(c => c.trim()),
+        rows: [],
+        type: 'financial'
+      }
+    } else if (currentTable && /\d/.test(line)) {
+      // Table row with numbers
+      const rowCols = line.split(/\s{2,}|\t+/)
+      if (rowCols.length >= currentTable.headers.length - 1) {
+        currentTable.rows.push({line_number: i, data: rowCols.map(c => c.trim())})
+      }
+    } else if (currentTable && (!line || columns.length < 2)) {
+      // End of table
+      if (currentTable.rows.length > 0) {
+        tables.push(currentTable)
+      }
+      currentTable = null
+    }
+  }
+
+  if (currentTable && currentTable.rows.length > 0) {
+    tables.push(currentTable)
+  }
+
+  analysis.tables = tables
+
+  // Pass 5: Extract calculations
+  const calculationPattern = /(?:total|sum|subtotal|grand total|final amount)\s+(?:is|equals?|=\s*)?\s*[\d,]+(?:\.\d{2})?/gi
+  const calcMatches = [...text.matchAll(calculationPattern)]
+  for (const match of calcMatches) {
+    analysis.calculations.push({
+      calculation: match[0],
+      position: match.index || 0,
+      type: 'calculation'
+    })
+  }
+
+  return analysis
+}
+
+// Extract payment schedule table (simplified version)
+function extractPaymentScheduleTable(chunksText: string[]): string {
+  const combined = chunksText.join('\n')
+  const lines = combined.split('\n').filter(ln => /FINANCIAL|AMOUNT|Rs\.|rupees?|₹/.test(ln))
+  
+  if (lines.length === 0) {
+    return ''
+  }
+
+  const rows: Array<[string, string]> = []
+  let totalAmount = 0
+
+  for (const ln of lines) {
+    // Extract numeric amount
+    const amountMatch = ln.match(/FINANCIAL:\s*AMOUNT:\s*([\d,]+)/i) || ln.match(/Rs\.\s*([\d,]+)/i) || ln.match(/([\d,]+)\s*\/-/)
+    const amountRaw = amountMatch ? amountMatch[1] : ''
+    let amountNum = 0
+    try {
+      amountNum = amountRaw ? parseInt(amountRaw.replace(/,/g, '')) : 0
+    } catch {
+      amountNum = 0
+    }
+
+    // Derive stage text
+    let stageText = ln.replace(/Rs\.\s*\[\[.*?\]\]\s*\/-\]?/gi, '')
+    stageText = stageText.replace(/\s{2,}/g, ' ').trim()
+    stageText = stageText.substring(0, 120)
+
+    if (amountNum > 0) {
+      totalAmount += amountNum
+    }
+    if (stageText || amountRaw) {
+      rows.push([stageText, amountRaw])
+    }
+  }
+
+  if (rows.length === 0) {
+    return ''
+  }
+
+  const tableLines = ['Payment Schedule:']
+  for (let idx = 0; idx < rows.length; idx++) {
+    const [stage, amount] = rows[idx]
+    const displayAmt = amount ? `${amount}/-` : ''
+    tableLines.push(`${idx + 1}. ${stage}: ${displayAmt}`)
+  }
+
+  if (totalAmount > 0) {
+    tableLines.push(`Total Amount: ${totalAmount.toLocaleString()}/-`)
+  }
+
+  return tableLines.join('\n')
+}
+
+// ============================================================================
+// EMBEDDING SERVICE (Vector Search Support)
+// ============================================================================
+
+interface EmbeddingService {
+  generateEmbedding(text: string): Promise<number[]>
+  searchSimilar(queryEmbedding: number[], documentId: number, k: number): Promise<Array<{chunk_index: number, score: number}>>
+}
+
+// Simple embedding service using text similarity (fallback until full embedding support)
+class SimpleEmbeddingService implements EmbeddingService {
+  // For now, this is a placeholder that will use keyword-based search
+  // In production, you would integrate:
+  // 1. Google's Text Embedding API (textembedding-gecko@003)
+  // 2. OpenAI Embeddings API
+  // 3. Or a JavaScript embedding library like @xenova/transformers
+  
+  async generateEmbedding(text: string): Promise<number[]> {
+    // Placeholder: Return empty embedding vector
+    // This will trigger fallback to keyword search
+    // TODO: Integrate actual embedding service
+    console.log('⚠️ Embedding generation not yet implemented, using keyword fallback')
+    return [] // Empty means use keyword search
+  }
+  
+  async searchSimilar(queryEmbedding: number[], documentId: number, k: number): Promise<Array<{chunk_index: number, score: number}>> {
+    // If no embeddings, return empty (will trigger fallback)
+    if (queryEmbedding.length === 0) {
+      return []
+    }
+    
+    // TODO: Implement pgvector similarity search using SQL
+    // SELECT chunk_index, 1 - (embedding_vec <=> query_vector) as similarity
+    // FROM document_chunks
+    // WHERE document_id = $1 AND has_embedding = true
+    // ORDER BY embedding_vec <=> query_vector
+    // LIMIT $2
+    
+    return []
+  }
+}
+
+// Embedding service using Supabase pgvector
+async function searchSimilarVectors(
+  queryVector: number[], 
+  documentId: number, 
+  k: number = 10
+): Promise<Array<{chunk_index: number, score: number}>> {
+  if (!queryVector || queryVector.length === 0) {
+    return []
+  }
+  
+  try {
+    // Convert vector to pgvector format: "[0.1,0.2,...]"
+    const vectorStr = `[${queryVector.join(',')}]`
+    
+    // Use Supabase RPC to call the search_similar_chunks function
+    // Note: This requires the SQL function to be set up (see vector_search_setup.sql)
+    const { data, error } = await supabase.rpc('search_similar_chunks', {
+      query_vector: vectorStr,
+      document_id: documentId,
+      limit_count: k
+    })
+    
+    if (error) {
+      // If RPC doesn't exist or embeddings not available, fall back to keyword search
+      if (error.message?.includes('function') || error.message?.includes('does not exist')) {
+        console.warn('⚠️ Vector search function not set up yet. Run vector_search_setup.sql in Supabase SQL Editor.')
+      } else {
+        console.warn('⚠️ Vector search not available, using keyword fallback:', error.message)
+      }
+      return []
+    }
+    
+    return (data || []).map((item: any) => ({
+      chunk_index: item.chunk_index,
+      score: item.similarity_score || 0
+    }))
+  } catch (e) {
+    console.warn('⚠️ Vector search error, using keyword fallback:', e)
+    return []
+  }
+}
+
+// Generate embedding using Google's Text Embedding API (alternative to InLegalBERT)
+async function generateEmbeddingGoogle(text: string): Promise<number[]> {
+  try {
+    // Check if we have Google API key for embeddings
+    const GOOGLE_API_KEY = Deno.env.get('GOOGLE_API_KEY') || GEMINI_API_KEY
+    
+    if (!GOOGLE_API_KEY) {
+      console.warn('⚠️ No Google API key for embeddings, using keyword fallback')
+      return []
+    }
+    
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1/models/text-embedding-004:embedContent?key=${GOOGLE_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'models/text-embedding-004',
+          content: { parts: [{ text }] }
+        })
+      }
+    )
+    
+    if (!response.ok) {
+      console.warn('⚠️ Google embedding API failed, using keyword fallback')
+      return []
+    }
+    
+    const data = await response.json()
+    return data.embedding?.values || []
+  } catch (e) {
+    console.warn('⚠️ Embedding generation error, using keyword fallback:', e)
+    return []
+  }
+}
+
+const embeddingService = new SimpleEmbeddingService()
+
 // Helper function to chunk text (used outside GeminiLLMService)
 function chunkText(text: string, chunkSize: number = 800, overlap: number = 160): string[] {
   if (!text || text.length === 0) {
@@ -521,129 +878,137 @@ function chunkText(text: string, chunkSize: number = 800, overlap: number = 160)
 // PDF text extraction function with advanced filtering
 async function extractTextFromPDF(fileBuffer: ArrayBuffer, filename: string): Promise<string> {
   try {
-    console.log('📄 Starting enhanced PDF text extraction...')
+    console.log('📄 Starting PDF text extraction...')
     
     // Convert ArrayBuffer to Uint8Array
     const uint8Array = new Uint8Array(fileBuffer)
     
-    // Decode the buffer using Latin1 (more tolerant of binary data)
+    // Decode using Latin1 to preserve byte values
     const rawText = new TextDecoder('latin1', { fatal: false }).decode(uint8Array)
     
-    // Extract text from parentheses (where most text content lives in PDFs)
-    console.log('🔍 Extracting text from PDF content...')
-    const parenthesesMatches = rawText.match(/\(([^\(\)]{3,})\)/g) || []
+    // Extract text from PDF content streams
+    const extractedParts: string[] = []
     
-    // Process and filter the extracted text
-    const extractedTextParts = []
-    
-    for (const match of parenthesesMatches) {
-      // Remove the parentheses and clean the text
-      const text = match.substring(1, match.length - 1)
-        .replace(/[^\x20-\x7E\n\r\t]/g, ' ') // Keep only printable ASCII
-        .replace(/\\(\d{3}|n|r|t|b|f|\\|\(|\))/g, ' ') // Remove escape sequences
-        .replace(/\s+/g, ' ')
-        .trim()
-      
-      // Only keep text that looks like natural language
-      // Must contain at least 3 letters and be at least 3 chars long
-      if (text.length >= 3 && /[a-zA-Z]{3,}/i.test(text)) {
-        extractedTextParts.push(text)
+    // Method 1: Extract text from TJ/Tj operators (text showing operators in PDF)
+    // Pattern: [(text)] TJ or (text) Tj
+    const tjPattern = /\[?\(([^()]{2,}?)\)\]?\s*T[Jj]/g
+    let match
+    while ((match = tjPattern.exec(rawText)) !== null) {
+      const text = match[1]
+      if (text && text.length > 2) {
+        extractedParts.push(text)
       }
     }
     
-    // Reconstruct the text, handling word breaks that might occur in PDFs
-    let combinedText = ''
-    let previousPart = ''
+    // Method 2: Extract text from parentheses in content streams
+    // More comprehensive than Method 1
+    const parenPattern = /\(([^()]{3,}?)\)/g
+    while ((match = parenPattern.exec(rawText)) !== null) {
+      const text = match[1]
+      // Only include if it looks like text (contains letters)
+      if (text && /[a-zA-Z]{2,}/i.test(text)) {
+        extractedParts.push(text)
+      }
+    }
     
-    for (const part of extractedTextParts) {
-      // Check if this part continues from the previous one
-      if (previousPart && 
-          !previousPart.endsWith('.') && 
-          !previousPart.endsWith('?') && 
-          !previousPart.endsWith('!') &&
-          !previousPart.endsWith(':') &&
-          previousPart.length < 50) {
-        combinedText += ' ' + part
-      } else {
-        if (combinedText && !combinedText.endsWith(' ')) {
-          combinedText += ' '
+    // Method 3: Extract from BT/ET blocks (text objects)
+    const btEtPattern = /BT\s+([\s\S]*?)\s+ET/g
+    while ((match = btEtPattern.exec(rawText)) !== null) {
+      const block = match[1]
+      // Extract text from this block
+      const blockTextPattern = /\(([^()]+)\)/g
+      let blockMatch
+      while ((blockMatch = blockTextPattern.exec(block)) !== null) {
+        const text = blockMatch[1]
+        if (text && /[a-zA-Z]{2,}/i.test(text)) {
+          extractedParts.push(text)
         }
-        combinedText += part
-      }
-      previousPart = part
-    }
-    
-    // Clean up the combined text
-    combinedText = combinedText
-      .replace(/\s+/g, ' ')
-      .replace(/ \./g, '.')
-      .replace(/ ,/g, ',')
-      .replace(/ ;/g, ';')
-      .replace(/ :/g, ':')
-      .replace(/ \?/g, '?')
-      .replace(/ !/g, '!')
-      .replace(/ \)/g, ')')
-      .replace(/\( /g, '(')
-      .trim()
-    
-    // Filter out common PDF syntax patterns that might have slipped through
-    const pdfSyntaxPatterns = [
-      'obj', 'endobj', 'stream', 'endstream', 'xref', 'trailer', 'startxref',
-      'Type', 'Pages', 'Page', 'Font', 'XObject', 'ProcSet', 'ExtGState',
-      'Pattern', 'Shading', 'Properties', 'Filter', 'FlateDecode', 'Length',
-      'Resources', 'MediaBox', 'Contents', 'Rotate', 'Group', 'Annots'
-    ]
-    
-    // Create a regex to match these patterns as whole words
-    const syntaxRegex = new RegExp(`\\b(${pdfSyntaxPatterns.join('|')})\\b`, 'g')
-    
-    // Apply the filter
-    let filteredText = combinedText.replace(syntaxRegex, '')
-    
-    // Remove any remaining PDF-specific notation
-    filteredText = filteredText
-      .replace(/\/[A-Za-z0-9]+/g, '') // Remove PDF name objects like /F1, /Page, etc.
-      .replace(/\[\s*\]/g, '') // Remove empty arrays
-      .replace(/<<\s*>>/g, '') // Remove empty dictionaries
-      .replace(/\s+/g, ' ')
-      .trim()
-    
-    // If we have enough text, return it
-    if (filteredText.length > 200) {
-      console.log(`✅ Successfully extracted ${filteredText.length} characters of readable text`)
-      
-      // Format the text into paragraphs for better readability
-      const formattedText = filteredText
-        .replace(/\.\s+/g, '.\n\n') // Add paragraph breaks after sentences
-        .replace(/\n{3,}/g, '\n\n') // Normalize paragraph spacing
-      
-      return formattedText.substring(0, 15000) // Limit to 15K chars
-    }
-    
-    // If we don't have enough text, try a more aggressive approach
-    console.log('⚠️ Not enough text found, trying advanced extraction...')
-    
-    // Extract any sequence of words that looks like natural language
-    const wordPattern = /\b[A-Za-z]{3,}(?:\s+[A-Za-z]+){2,}\b/g
-    const wordMatches = rawText.match(wordPattern) || []
-    
-    if (wordMatches.length > 0) {
-      // Join the matches and clean up
-      const wordText = wordMatches.join(' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-      
-      if (wordText.length > 100) {
-        console.log(`✅ Advanced extraction found ${wordText.length} characters`)
-        return wordText.substring(0, 10000)
       }
     }
     
-    // If all else fails, return a placeholder
-    return `This document appears to be a PDF titled "${filename}" but doesn't contain easily extractable text content. It may be scanned, image-based, or heavily formatted.`
+    console.log(`🔍 Found ${extractedParts.length} text fragments`)
+    
+    // Process and clean all extracted parts
+    const cleanedParts: string[] = []
+    
+    for (const part of extractedParts) {
+      // Decode PDF escape sequences
+      let cleaned = part
+        .replace(/\\n/g, '\n')
+        .replace(/\\r/g, '\r')
+        .replace(/\\t/g, '\t')
+        .replace(/\\\(/g, '(')
+        .replace(/\\\)/g, ')')
+        .replace(/\\\\/g, '\\')
+        .replace(/\\(\d{3})/g, (_, octal) => String.fromCharCode(parseInt(octal, 8)))
+      
+      // Remove non-printable characters but keep newlines
+      cleaned = cleaned.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')
+      
+      // Normalize whitespace
+      cleaned = cleaned.replace(/\s+/g, ' ').trim()
+      
+      // Only keep parts that look like real text
+      // Must have at least 2 letters and be at least 3 characters
+      if (cleaned.length >= 3 && /[a-zA-Z]{2,}/i.test(cleaned)) {
+        // Filter out common PDF syntax
+        if (!/^(obj|endobj|stream|endstream|xref|trailer|Type|Font|Page|Pages|XObject|Catalog|Encoding)$/i.test(cleaned)) {
+          cleanedParts.push(cleaned)
+        }
+      }
+    }
+    
+    console.log(`✅ Cleaned to ${cleanedParts.length} valid text parts`)
+    
+    if (cleanedParts.length === 0) {
+      console.log('⚠️ No text extracted, PDF may be image-based')
+      return `PDF document "${filename}" uploaded. The document appears to be image-based or contains no extractable text. For best results, please use text-based PDF documents.`
+    }
+    
+    // Join parts intelligently
+    let fullText = ''
+    for (let i = 0; i < cleanedParts.length; i++) {
+      const part = cleanedParts[i]
+      const nextPart = cleanedParts[i + 1]
+      
+      fullText += part
+      
+      // Add spacing between parts
+      if (nextPart) {
+        // If current part ends with punctuation or next starts with capital, add space
+        if (/[.!?:]$/.test(part) || /^[A-Z]/.test(nextPart)) {
+          fullText += ' '
+        } else {
+          fullText += ' '
+        }
+      }
+    }
+    
+    // Final cleanup
+    fullText = fullText
+      .replace(/\s+/g, ' ')
+      .replace(/ ([.,;:!?])/g, '$1')
+      .replace(/\(\s+/g, '(')
+      .replace(/\s+\)/g, ')')
+      .trim()
+    
+    console.log(`📊 Final extracted text: ${fullText.length} characters`)
+    
+    if (fullText.length < 50) {
+      return `PDF document "${filename}" uploaded. Extracted minimal text (${fullText.length} chars). The document may be image-based or heavily formatted.`
+    }
+    
+    // Limit to 20000 characters to prevent token issues
+    if (fullText.length > 20000) {
+      console.log(`⚠️ Text too long (${fullText.length} chars), truncating to 20000`)
+      fullText = fullText.substring(0, 20000) + '...[truncated]'
+    }
+    
+    return fullText
+    
   } catch (error) {
     console.error('❌ PDF extraction failed:', error)
-    return `This is a PDF document titled "${filename}". The text extraction process encountered an error: ${error.message}`
+    return `PDF document "${filename}" uploaded. Text extraction encountered an error: ${error.message}. The document has been stored but text extraction failed.`
   }
 }
 
@@ -658,6 +1023,91 @@ try {
   }
 } catch (e) {
   console.error('❌ Database connection error:', e.message)
+}
+
+// ============================================================================
+// USER MANAGEMENT HELPERS
+// ============================================================================
+
+// Helper function to extract user ID from request
+async function getCurrentUserId(req: Request): Promise<number | null> {
+  try {
+    // Check for JWT token in Authorization header
+    const authHeader = req.headers.get('authorization')
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      // For now, we'll use the free user system
+      // In production, you would decode the JWT token here
+      // For authenticated users, extract user_id from token
+      // For this implementation, we'll check if it's a free user request
+      const { data: freeUser } = await supabase
+        .from('users')
+        .select('id')
+        .eq('email', 'free@system.local')
+        .single()
+      return freeUser?.id || null
+    }
+    // If no auth header, return null (will use free user logic)
+    return null
+  } catch (e) {
+    console.error('Error extracting user ID:', e)
+    return null
+  }
+}
+
+// Helper function to get or create free user
+async function getOrCreateFreeUser(): Promise<number> {
+  try {
+    const { data: existingUser } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', 'free@system.local')
+      .single()
+    
+    if (existingUser) {
+      return existingUser.id
+    }
+    
+    // Create free user if doesn't exist
+    const { data: newUser, error } = await supabase
+      .from('users')
+      .insert({
+        email: 'free@system.local',
+        username: 'free_user',
+        is_verified: true
+      })
+      .select('id')
+      .single()
+    
+    if (error || !newUser) {
+      console.error('Failed to create free user:', error)
+      return 1 // Fallback to ID 1
+    }
+    
+    return newUser.id
+  } catch (e) {
+    console.error('Error getting/creating free user:', e)
+    return 1 // Fallback
+  }
+}
+
+// Helper function to validate session ownership
+async function validateSessionOwnership(sessionId: number, userId: number): Promise<boolean> {
+  try {
+    const { data: session, error } = await supabase
+      .from('qa_sessions')
+      .select('user_id')
+      .eq('id', sessionId)
+      .single()
+    
+    if (error || !session) {
+      return false
+    }
+    
+    return session.user_id === userId
+  } catch (e) {
+    console.error('Error validating session ownership:', e)
+    return false
+  }
 }
 
 serve(async (req) => {
@@ -828,17 +1278,21 @@ serve(async (req) => {
           )
         }
 
-        // Get session and document context
+        // Get current user ID and validate session ownership (like backend)
+        const userId = await getCurrentUserId(req) || await getOrCreateFreeUser()
+
+        // Get session and document context with ownership validation
         const { data: session, error: sessionError } = await supabase
           .from('qa_sessions')
           .select('*, documents(*)')
           .eq('id', session_id)
+          .eq('user_id', userId)  // Validate ownership (like backend)
           .single()
 
         if (sessionError || !session) {
           console.error('❌ Session not found:', sessionError)
-      return new Response(
-        JSON.stringify({ 
+          return new Response(
+            JSON.stringify({ 
               error: 'Session not found',
               message: 'Please provide a valid session_id'
             }),
@@ -866,75 +1320,235 @@ serve(async (req) => {
 
         console.log(`📄 Answering question for document: ${document.title}`)
 
-        // Get relevant chunks (like backend does)
-        let context = document.extracted_text
-        
-        // Try to get chunks from document_chunks table if available
+        // Check if question is money-related
+        const isMoney = isMoneyRelated(question)
+        const isSchedule = isScheduleQuery(question)
+        console.log(`💰 Question is money-related: ${isMoney}, schedule query: ${isSchedule}`)
+
+        // Get all chunks for comprehensive analysis
         const { data: allChunks } = await supabase
           .from('document_chunks')
           .select('content, chunk_index')
           .eq('document_id', document.id)
           .order('chunk_index', { ascending: true })
 
+        let fullDocumentText = document.extracted_text || ''
+        
+        // Build full document text from chunks if available
         if (allChunks && allChunks.length > 0) {
-          // Get first 15 chunks like backend semantic search
-          const baseChunks = allChunks.slice(0, 15)
-          
-          // Include adjacent chunks (±1) for better context
-          const candidateIndices = new Set<number>()
-          baseChunks.forEach(ch => {
-            candidateIndices.add(ch.chunk_index)
-            candidateIndices.add(ch.chunk_index - 1)
-            candidateIndices.add(ch.chunk_index + 1)
-          })
-          
-          // Get chunks with adjacent ones
-          const indices = Array.from(candidateIndices).filter(i => i >= 0).sort((a, b) => a - b)
-          const { data: selectedChunks } = await supabase
-            .from('document_chunks')
-            .select('content')
-            .eq('document_id', document.id)
-            .in('chunk_index', indices)
-            .order('chunk_index', { ascending: true })
-          
-          if (selectedChunks && selectedChunks.length > 0) {
-            // Join chunks and limit to ~3500 chars (like backend)
-            let joinedContext = selectedChunks.map(ch => ch.content).join('\n\n')
-            if (joinedContext.length > 3500) {
-              joinedContext = joinedContext.substring(0, 3500) + '...'
-            }
-            context = joinedContext
-            console.log(`📊 Using ${selectedChunks.length} chunks (including adjacent) for context (${context.length} chars)`)
-          } else {
-            // Fallback to first 10 chunks without adjacent
-            context = baseChunks.slice(0, 10).map(ch => ch.content).join('\n\n')
-            console.log(`📊 Using first 10 chunks for context (${context.length} chars)`)
-          }
-        } else {
-          // Fallback to first 3500 chars of extracted text (like backend)
-          context = document.extracted_text.substring(0, 3500)
-          console.log(`📊 Using truncated extracted text (${context.length} chars)`)
+          fullDocumentText = allChunks.map(ch => ch.content || '').join('\n\n')
         }
 
-        // Use Gemini to answer the question
-        const result = await geminiService.answerQuestion(question, context)
+        // Perform multi-pass financial analysis if money-related
+        let financialAnalysis: FinancialAnalysis | null = null
+        if (isMoney) {
+          financialAnalysis = multiPassFinancialAnalysis(fullDocumentText)
+          console.log(`💰 Financial analysis: ${financialAnalysis.amounts.length} amounts, ${financialAnalysis.payment_schedules.length} schedules, ${financialAnalysis.tables.length} tables`)
+        }
 
-        // Save the question and answer to database
-        const { error: qaError } = await supabase
+        // Get relevant chunks (enhanced with financial analysis)
+        let context = ''
+        const contextParts: string[] = []
+
+        // Add comprehensive financial analysis summary if available
+        if (isMoney && financialAnalysis) {
+          contextParts.push('=== COMPREHENSIVE FINANCIAL ANALYSIS ===')
+          
+          // Add monetary amounts
+          if (financialAnalysis.amounts.length > 0) {
+            contextParts.push(`\nMONETARY AMOUNTS FOUND (${financialAnalysis.amounts.length}):`)
+            for (let i = 0; i < Math.min(financialAnalysis.amounts.length, 10); i++) {
+              const amountData = financialAnalysis.amounts[i]
+              contextParts.push(`${i + 1}. ${amountData.amount} - Context: ${amountData.context}`)
+            }
+          }
+          
+          // Add payment schedules
+          if (financialAnalysis.payment_schedules.length > 0) {
+            contextParts.push(`\nPAYMENT SCHEDULES FOUND (${financialAnalysis.payment_schedules.length}):`)
+            for (let i = 0; i < Math.min(financialAnalysis.payment_schedules.length, 3); i++) {
+              const schedule = financialAnalysis.payment_schedules[i]
+              contextParts.push(`${i + 1}. ${schedule.text.substring(0, 200)}...`)
+            }
+          }
+          
+          // Add financial terms
+          if (financialAnalysis.financial_terms.length > 0) {
+            contextParts.push(`\nFINANCIAL TERMS FOUND (${financialAnalysis.financial_terms.length}):`)
+            for (let i = 0; i < Math.min(financialAnalysis.financial_terms.length, 10); i++) {
+              contextParts.push(`${i + 1}. ${financialAnalysis.financial_terms[i].term}`)
+            }
+          }
+          
+          // Add tables
+          if (financialAnalysis.tables.length > 0) {
+            contextParts.push(`\nTABLES FOUND (${financialAnalysis.tables.length}):`)
+            for (let i = 0; i < Math.min(financialAnalysis.tables.length, 3); i++) {
+              const table = financialAnalysis.tables[i]
+              contextParts.push(`Table ${i + 1} (${table.type}): Headers: ${table.headers.join(', ')}`)
+              for (let j = 0; j < Math.min(table.rows.length, 5); j++) {
+                contextParts.push(`  Row ${j + 1}: ${table.rows[j].data.join(', ')}`)
+              }
+            }
+          }
+          
+          // Add calculations
+          if (financialAnalysis.calculations.length > 0) {
+            contextParts.push(`\nCALCULATIONS FOUND (${financialAnalysis.calculations.length}):`)
+            for (let i = 0; i < Math.min(financialAnalysis.calculations.length, 5); i++) {
+              contextParts.push(`${i + 1}. ${financialAnalysis.calculations[i].calculation}`)
+            }
+          }
+          
+          contextParts.push('\n=== END FINANCIAL ANALYSIS ===\n')
+        }
+
+        // Add payment schedule table if schedule query
+        if (isSchedule && allChunks) {
+          const scheduleTable = extractPaymentScheduleTable(allChunks.map(ch => ch.content || ''))
+          if (scheduleTable) {
+            contextParts.push(`TABLE DATA:\n${scheduleTable}`)
+            console.log(`📊 Synthesized payment schedule table`)
+          }
+        }
+
+        // Try vector similarity search first (if embeddings available)
+        let candidateIndices = new Set<number>()
+        
+        try {
+          // Generate embedding for question using Google's API
+          const questionEmbedding = await generateEmbeddingGoogle(question)
+          
+          if (questionEmbedding.length > 0) {
+            console.log(`🔍 Q&A: Using vector search with ${questionEmbedding.length}-dim embedding`)
+            // Try vector similarity search via pgvector
+            const vectorSearchResults = await searchSimilarVectors(questionEmbedding, document.id, isMoney ? 25 : 15)
+            
+            if (vectorSearchResults.length > 0) {
+              console.log(`✅ Vector search found ${vectorSearchResults.length} similar chunks`)
+              // Add vector search results
+              for (const result of vectorSearchResults) {
+                candidateIndices.add(result.chunk_index)
+                // Include adjacent chunks (±1 to ±3 depending on query type)
+                const spread = isMoney ? 3 : 2
+                for (let i = -spread; i <= spread; i++) {
+                  candidateIndices.add(result.chunk_index + i)
+                }
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('⚠️ Vector search failed, using keyword fallback:', e)
+        }
+        
+        // Fallback to keyword-based search if vector search didn't find enough results
+        if (candidateIndices.size < 5 && allChunks) {
+          console.log('📊 Q&A: Using keyword-based chunk selection (vector search unavailable)')
+          // Get base chunks (first 15 for semantic search simulation, or more for financial)
+          const baseK = isMoney ? 25 : 15
+          const baseChunks = allChunks.slice(0, baseK)
+          
+          // Include adjacent chunks (±1 to ±3 depending on query type)
+          baseChunks.forEach(ch => {
+            const idx = ch.chunk_index
+            const spread = isMoney ? 3 : 2
+            for (let i = -spread; i <= spread; i++) {
+              candidateIndices.add(idx + i)
+            }
+          })
+
+          // For money queries, also find chunks with amounts
+          if (isMoney) {
+            const amountPatterns = [
+              /\$[\d,]+/,  // Dollar amounts
+              /[\d,]+(?:\.\d{2})?\/-/,  // Indian currency
+              /[\d,]+(?:\.\d{2})?\s*\/-/,  // Indian currency with space
+              /[\d,]+(?:\.\d{2})?\s*(?:dollars?|usd|eur|gbp|rupees?)/i,  // Currency amounts
+            ]
+            
+            allChunks.forEach(ch => {
+              const content = ch.content || ''
+              if (amountPatterns.some(pattern => pattern.test(content))) {
+                candidateIndices.add(ch.chunk_index)
+                // Include more surrounding context for amount chunks
+                candidateIndices.add(ch.chunk_index - 2)
+                candidateIndices.add(ch.chunk_index - 1)
+                candidateIndices.add(ch.chunk_index + 1)
+                candidateIndices.add(ch.chunk_index + 2)
+              }
+            })
+          }
+        }
+
+        // Fetch selected chunks
+        const indices = Array.from(candidateIndices).filter(i => i >= 0).sort((a, b) => a - b)
+        let selectedChunks: Array<{content: string, chunk_index: number}> = []
+        
+        if (allChunks && indices.length > 0) {
+          selectedChunks = allChunks.filter(ch => indices.includes(ch.chunk_index))
+        } else if (allChunks) {
+          // Final fallback: use first chunks
+          const baseK = isMoney ? 25 : 15
+          selectedChunks = allChunks.slice(0, baseK)
+        }
+
+        // Build context from chunks
+        const maxContextLength = isMoney ? 8000 : 3500
+        let totalLen = contextParts.join('\n\n').length
+        
+        for (const ch of selectedChunks) {
+          if (!ch.content) continue
+          if (totalLen >= maxContextLength) break
+          contextParts.push(ch.content)
+          totalLen += ch.content.length
+        }
+
+        // If no chunks, use extracted text
+        if (contextParts.length === (isMoney ? 1 : 0)) {
+          const textLen = Math.min(fullDocumentText.length, maxContextLength)
+          contextParts.push(fullDocumentText.substring(0, textLen))
+        }
+
+        context = contextParts.join('\n\n')
+        console.log(`📊 Final context length: ${context.length} chars (${selectedChunks.length} chunks)`)
+
+        // Create question record FIRST (like backend)
+        const startTime = Date.now()
+        const { data: questionRecord, error: createError } = await supabase
           .from('qa_questions')
           .insert({
             session_id: session_id,
             question: question,
-            answer: result.answer,
-            confidence_score: result.confidence,
-            model_used: result.model_used,
-            processing_time: 1.0, // Placeholder
-            token_count: result.answer.length, // Rough estimate
           })
+          .select()
+          .single()
 
-        if (qaError) {
-          console.error('⚠️ Failed to save Q&A to database:', qaError)
-          // Don't fail the request if database save fails
+        if (createError || !questionRecord) {
+          console.error('⚠️ Failed to create question record:', createError)
+        }
+
+        // Use Gemini to answer the question
+        const result = await geminiService.answerQuestion(question, context)
+        const processingTime = (Date.now() - startTime) / 1000
+
+        // Update question with answer (like backend)
+        if (questionRecord) {
+          const { error: updateError } = await supabase
+            .from('qa_questions')
+            .update({
+              answer: result.answer,
+              confidence_score: result.confidence,
+              context_used: context, // Store context used
+              processing_time: processingTime,
+              model_used: result.model_used,
+              answered_at: new Date().toISOString(),
+              token_count: result.answer.length + context.length, // Rough estimate
+            })
+            .eq('id', questionRecord.id)
+
+          if (updateError) {
+            console.error('⚠️ Failed to update question with answer:', updateError)
+          }
         }
 
         // Update session activity
@@ -946,13 +1560,25 @@ serve(async (req) => {
           })
           .eq('id', session_id)
 
+        // Return complete response matching backend QAQuestionResponse schema
         return new Response(
           JSON.stringify({
-            answer: result.answer,
-          question_id: Date.now(),
+            id: questionRecord?.id || Date.now(),
             session_id: session_id,
-            confidence: result.confidence,
+            question: question,
+            answer: result.answer,
+            confidence_score: result.confidence,
+            context_used: context, // Include context used
+            processing_time: processingTime,
             model_used: result.model_used,
+            answered_at: questionRecord ? new Date().toISOString() : null,
+            created_at: questionRecord?.created_at || new Date().toISOString(),
+            is_helpful: null,
+            user_rating: null,
+            feedback: null,
+            token_count: result.answer.length + context.length,
+            // Legacy fields for compatibility
+            confidence: result.confidence,
             timestamp: result.timestamp
           }),
           {
@@ -1048,75 +1674,235 @@ serve(async (req) => {
 
         console.log(`📄 Answering free question for document: ${document.title}`)
 
-        // Get relevant chunks (like backend does)
-        let context = document.extracted_text
-        
-        // Try to get chunks from document_chunks table if available
+        // Check if question is money-related
+        const isMoney = isMoneyRelated(question)
+        const isSchedule = isScheduleQuery(question)
+        console.log(`💰 Free question is money-related: ${isMoney}, schedule query: ${isSchedule}`)
+
+        // Get all chunks for comprehensive analysis
         const { data: allChunks } = await supabase
           .from('document_chunks')
           .select('content, chunk_index')
           .eq('document_id', document.id)
           .order('chunk_index', { ascending: true })
 
+        let fullDocumentText = document.extracted_text || ''
+        
+        // Build full document text from chunks if available
         if (allChunks && allChunks.length > 0) {
-          // Get first 15 chunks like backend semantic search
-          const baseChunks = allChunks.slice(0, 15)
-          
-          // Include adjacent chunks (±1) for better context
-          const candidateIndices = new Set<number>()
-          baseChunks.forEach(ch => {
-            candidateIndices.add(ch.chunk_index)
-            candidateIndices.add(ch.chunk_index - 1)
-            candidateIndices.add(ch.chunk_index + 1)
-          })
-          
-          // Get chunks with adjacent ones
-          const indices = Array.from(candidateIndices).filter(i => i >= 0).sort((a, b) => a - b)
-          const { data: selectedChunks } = await supabase
-            .from('document_chunks')
-            .select('content')
-            .eq('document_id', document.id)
-            .in('chunk_index', indices)
-            .order('chunk_index', { ascending: true })
-          
-          if (selectedChunks && selectedChunks.length > 0) {
-            // Join chunks and limit to ~3500 chars (like backend)
-            let joinedContext = selectedChunks.map(ch => ch.content).join('\n\n')
-            if (joinedContext.length > 3500) {
-              joinedContext = joinedContext.substring(0, 3500) + '...'
-            }
-            context = joinedContext
-            console.log(`📊 Using ${selectedChunks.length} chunks (including adjacent) for context (${context.length} chars)`)
-          } else {
-            // Fallback to first 10 chunks without adjacent
-            context = baseChunks.slice(0, 10).map(ch => ch.content).join('\n\n')
-            console.log(`📊 Using first 10 chunks for context (${context.length} chars)`)
-          }
-        } else {
-          // Fallback to first 3500 chars of extracted text (like backend)
-          context = document.extracted_text.substring(0, 3500)
-          console.log(`📊 Using truncated extracted text (${context.length} chars)`)
+          fullDocumentText = allChunks.map(ch => ch.content || '').join('\n\n')
         }
 
-        // Use Gemini to answer the question
-        const result = await geminiService.answerQuestion(question, context)
+        // Perform multi-pass financial analysis if money-related
+        let financialAnalysis: FinancialAnalysis | null = null
+        if (isMoney) {
+          financialAnalysis = multiPassFinancialAnalysis(fullDocumentText)
+          console.log(`💰 Financial analysis: ${financialAnalysis.amounts.length} amounts, ${financialAnalysis.payment_schedules.length} schedules, ${financialAnalysis.tables.length} tables`)
+        }
 
-        // Save the question and answer to database
-        const { error: qaError } = await supabase
+        // Get relevant chunks (enhanced with financial analysis)
+        let context = ''
+        const contextParts: string[] = []
+
+        // Add comprehensive financial analysis summary if available
+        if (isMoney && financialAnalysis) {
+          contextParts.push('=== COMPREHENSIVE FINANCIAL ANALYSIS ===')
+          
+          // Add monetary amounts
+          if (financialAnalysis.amounts.length > 0) {
+            contextParts.push(`\nMONETARY AMOUNTS FOUND (${financialAnalysis.amounts.length}):`)
+            for (let i = 0; i < Math.min(financialAnalysis.amounts.length, 10); i++) {
+              const amountData = financialAnalysis.amounts[i]
+              contextParts.push(`${i + 1}. ${amountData.amount} - Context: ${amountData.context}`)
+            }
+          }
+          
+          // Add payment schedules
+          if (financialAnalysis.payment_schedules.length > 0) {
+            contextParts.push(`\nPAYMENT SCHEDULES FOUND (${financialAnalysis.payment_schedules.length}):`)
+            for (let i = 0; i < Math.min(financialAnalysis.payment_schedules.length, 3); i++) {
+              const schedule = financialAnalysis.payment_schedules[i]
+              contextParts.push(`${i + 1}. ${schedule.text.substring(0, 200)}...`)
+            }
+          }
+          
+          // Add financial terms
+          if (financialAnalysis.financial_terms.length > 0) {
+            contextParts.push(`\nFINANCIAL TERMS FOUND (${financialAnalysis.financial_terms.length}):`)
+            for (let i = 0; i < Math.min(financialAnalysis.financial_terms.length, 10); i++) {
+              contextParts.push(`${i + 1}. ${financialAnalysis.financial_terms[i].term}`)
+            }
+          }
+          
+          // Add tables
+          if (financialAnalysis.tables.length > 0) {
+            contextParts.push(`\nTABLES FOUND (${financialAnalysis.tables.length}):`)
+            for (let i = 0; i < Math.min(financialAnalysis.tables.length, 3); i++) {
+              const table = financialAnalysis.tables[i]
+              contextParts.push(`Table ${i + 1} (${table.type}): Headers: ${table.headers.join(', ')}`)
+              for (let j = 0; j < Math.min(table.rows.length, 5); j++) {
+                contextParts.push(`  Row ${j + 1}: ${table.rows[j].data.join(', ')}`)
+              }
+            }
+          }
+          
+          // Add calculations
+          if (financialAnalysis.calculations.length > 0) {
+            contextParts.push(`\nCALCULATIONS FOUND (${financialAnalysis.calculations.length}):`)
+            for (let i = 0; i < Math.min(financialAnalysis.calculations.length, 5); i++) {
+              contextParts.push(`${i + 1}. ${financialAnalysis.calculations[i].calculation}`)
+            }
+          }
+          
+          contextParts.push('\n=== END FINANCIAL ANALYSIS ===\n')
+        }
+
+        // Add payment schedule table if schedule query
+        if (isSchedule && allChunks) {
+          const scheduleTable = extractPaymentScheduleTable(allChunks.map(ch => ch.content || ''))
+          if (scheduleTable) {
+            contextParts.push(`TABLE DATA:\n${scheduleTable}`)
+            console.log(`📊 Synthesized payment schedule table`)
+          }
+        }
+
+        // Try vector similarity search first (if embeddings available)
+        let candidateIndices = new Set<number>()
+        
+        try {
+          // Generate embedding for question using Google's API
+          const questionEmbedding = await generateEmbeddingGoogle(question)
+          
+          if (questionEmbedding.length > 0) {
+            console.log(`🔍 Free Q&A: Using vector search with ${questionEmbedding.length}-dim embedding`)
+            // Try vector similarity search via pgvector
+            const vectorSearchResults = await searchSimilarVectors(questionEmbedding, document.id, isMoney ? 25 : 15)
+            
+            if (vectorSearchResults.length > 0) {
+              console.log(`✅ Vector search found ${vectorSearchResults.length} similar chunks`)
+              // Add vector search results
+              for (const result of vectorSearchResults) {
+                candidateIndices.add(result.chunk_index)
+                // Include adjacent chunks (±1 to ±3 depending on query type)
+                const spread = isMoney ? 3 : 2
+                for (let i = -spread; i <= spread; i++) {
+                  candidateIndices.add(result.chunk_index + i)
+                }
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('⚠️ Vector search failed, using keyword fallback:', e)
+        }
+        
+        // Fallback to keyword-based search if vector search didn't find enough results
+        if (candidateIndices.size < 5 && allChunks) {
+          console.log('📊 Free Q&A: Using keyword-based chunk selection (vector search unavailable)')
+          // Get base chunks (first 15 for semantic search simulation, or more for financial)
+          const baseK = isMoney ? 25 : 15
+          const baseChunks = allChunks.slice(0, baseK)
+          
+          // Include adjacent chunks (±1 to ±3 depending on query type)
+          baseChunks.forEach(ch => {
+            const idx = ch.chunk_index
+            const spread = isMoney ? 3 : 2
+            for (let i = -spread; i <= spread; i++) {
+              candidateIndices.add(idx + i)
+            }
+          })
+
+          // For money queries, also find chunks with amounts
+          if (isMoney) {
+            const amountPatterns = [
+              /\$[\d,]+/,  // Dollar amounts
+              /[\d,]+(?:\.\d{2})?\/-/,  // Indian currency
+              /[\d,]+(?:\.\d{2})?\s*\/-/,  // Indian currency with space
+              /[\d,]+(?:\.\d{2})?\s*(?:dollars?|usd|eur|gbp|rupees?)/i,  // Currency amounts
+            ]
+            
+            allChunks.forEach(ch => {
+              const content = ch.content || ''
+              if (amountPatterns.some(pattern => pattern.test(content))) {
+                candidateIndices.add(ch.chunk_index)
+                // Include more surrounding context for amount chunks
+                candidateIndices.add(ch.chunk_index - 2)
+                candidateIndices.add(ch.chunk_index - 1)
+                candidateIndices.add(ch.chunk_index + 1)
+                candidateIndices.add(ch.chunk_index + 2)
+              }
+            })
+          }
+        }
+
+        // Fetch selected chunks
+        const indices = Array.from(candidateIndices).filter(i => i >= 0).sort((a, b) => a - b)
+        let selectedChunks: Array<{content: string, chunk_index: number}> = []
+        
+        if (allChunks && indices.length > 0) {
+          selectedChunks = allChunks.filter(ch => indices.includes(ch.chunk_index))
+        } else if (allChunks) {
+          // Final fallback: use first chunks
+          const baseK = isMoney ? 25 : 15
+          selectedChunks = allChunks.slice(0, baseK)
+        }
+
+        // Build context from chunks
+        const maxContextLength = isMoney ? 8000 : 3500
+        let totalLen = contextParts.join('\n\n').length
+        
+        for (const ch of selectedChunks) {
+          if (!ch.content) continue
+          if (totalLen >= maxContextLength) break
+          contextParts.push(ch.content)
+          totalLen += ch.content.length
+        }
+
+        // If no chunks, use extracted text
+        if (contextParts.length === (isMoney ? 1 : 0)) {
+          const textLen = Math.min(fullDocumentText.length, maxContextLength)
+          contextParts.push(fullDocumentText.substring(0, textLen))
+        }
+
+        context = contextParts.join('\n\n')
+        console.log(`📊 Final context length: ${context.length} chars (${selectedChunks.length} chunks)`)
+
+        // Create question record FIRST (like backend)
+        const startTime = Date.now()
+        const { data: questionRecord, error: createError } = await supabase
           .from('qa_questions')
           .insert({
             session_id: session_id,
             question: question,
-            answer: result.answer,
-            confidence_score: result.confidence,
-            model_used: result.model_used,
-            processing_time: 1.0, // Placeholder
-            token_count: result.answer.length, // Rough estimate
           })
+          .select()
+          .single()
 
-        if (qaError) {
-          console.error('⚠️ Failed to save free Q&A to database:', qaError)
-          // Don't fail the request if database save fails
+        if (createError || !questionRecord) {
+          console.error('⚠️ Failed to create free question record:', createError)
+        }
+
+        // Use Gemini to answer the question
+        const result = await geminiService.answerQuestion(question, context)
+        const processingTime = (Date.now() - startTime) / 1000
+
+        // Update question with answer (like backend)
+        if (questionRecord) {
+          const { error: updateError } = await supabase
+            .from('qa_questions')
+            .update({
+              answer: result.answer,
+              confidence_score: result.confidence,
+              context_used: context, // Store context used
+              processing_time: processingTime,
+              model_used: result.model_used,
+              answered_at: new Date().toISOString(),
+              token_count: result.answer.length + context.length, // Rough estimate
+            })
+            .eq('id', questionRecord.id)
+
+          if (updateError) {
+            console.error('⚠️ Failed to update free question with answer:', updateError)
+          }
         }
 
         // Update session activity
@@ -1128,13 +1914,25 @@ serve(async (req) => {
           })
           .eq('id', session_id)
 
+        // Return complete response matching backend QAQuestionResponse schema
         return new Response(
           JSON.stringify({
-            answer: result.answer,
-            question_id: Date.now(),
+            id: questionRecord?.id || Date.now(),
             session_id: session_id,
-            confidence: result.confidence,
+            question: question,
+            answer: result.answer,
+            confidence_score: result.confidence,
+            context_used: context, // Include context used
+            processing_time: processingTime,
             model_used: result.model_used,
+            answered_at: questionRecord ? new Date().toISOString() : null,
+            created_at: questionRecord?.created_at || new Date().toISOString(),
+            is_helpful: null,
+            user_rating: null,
+            feedback: null,
+            token_count: result.answer.length + context.length,
+            // Legacy fields for compatibility
+            confidence: result.confidence,
             timestamp: result.timestamp
           }),
           {
@@ -1365,6 +2163,69 @@ serve(async (req) => {
       )
     }
 
+    // Debug endpoint for document processing
+    const debugMatch = path.match(/^\/free\/debug\/document\/(\d+)$/)
+    if (debugMatch && method === 'GET') {
+      try {
+        const documentId = Number(debugMatch[1])
+        
+        // Get or create free user
+        let userId = 1
+        const { data: existingUser } = await supabase
+          .from('users')
+          .select('id')
+          .eq('email', 'free@system.local')
+          .single()
+        if (existingUser) userId = existingUser.id
+        
+        const { data: document, error: docError } = await supabase
+          .from('documents')
+          .select('id, filename, status, is_processed, extracted_text')
+          .eq('id', documentId)
+          .eq('owner_id', userId)
+          .single()
+        
+        if (docError || !document) {
+          return new Response(
+            JSON.stringify({ error: 'Document not found' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 404 }
+          )
+        }
+        
+        // Get chunks
+        const { data: chunks } = await supabase
+          .from('document_chunks')
+          .select('chunk_index, content')
+          .eq('document_id', documentId)
+          .order('chunk_index', { ascending: true })
+        
+        // Check for amounts in chunks
+        const amountPattern = /[\d,]+(?:\.\d{2})?\/-|\$[\d,]+/
+        
+        return new Response(
+          JSON.stringify({
+            document_id: documentId,
+            filename: document.filename,
+            status: document.status,
+            is_processed: document.is_processed,
+            total_chunks: chunks?.length || 0,
+            chunks_preview: chunks?.slice(0, 5).map(ch => ({
+              index: ch.chunk_index,
+              content_preview: ch.content ? (ch.content.substring(0, 200) + (ch.content.length > 200 ? '...' : '')) : '',
+              has_amounts: ch.content ? amountPattern.test(ch.content) : false
+            })) || []
+          }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
+        )
+      } catch (e) {
+        console.error('Debug endpoint error:', e)
+        return new Response(
+          JSON.stringify({ error: 'Debug failed', details: String(e) }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+        )
+      }
+    }
+
     // Cleanup orphaned sessions
     if (path === '/free/cleanup-orphaned' && method === 'POST') {
       console.log('Cleaning up orphaned sessions')
@@ -1387,9 +2248,14 @@ serve(async (req) => {
       if (method === 'GET') {
         // List all sessions for the current user
         try {
+          // Get current user ID
+          const userId = await getCurrentUserId(req) || await getOrCreateFreeUser()
+          
+          // Filter sessions by user_id (like backend)
           const { data: sessions, error } = await supabase
             .from('qa_sessions')
             .select('*, documents(id, title, original_filename, file_size, mime_type, created_at)')
+            .eq('user_id', userId)
             .order('created_at', { ascending: false })
           
           if (error) {
@@ -1424,20 +2290,15 @@ serve(async (req) => {
           )
         }
         
-        // Get or create free user
-        let userId = 1
-        const { data: existingUser } = await supabase
-          .from('users')
-          .select('id')
-          .eq('email', 'free@system.local')
-          .single()
-        if (existingUser) userId = existingUser.id
+        // Get current user ID
+        const userId = await getCurrentUserId(req) || await getOrCreateFreeUser()
         
-        // Verify document exists and is processed
+        // Verify document exists, is processed, and belongs to user (like backend)
         const { data: doc, error: docError } = await supabase
           .from('documents')
-          .select('id, title, is_processed')
+          .select('id, title, is_processed, owner_id')
           .eq('id', document_id)
+          .eq('owner_id', userId)  // Validate ownership
           .single()
         
         if (docError || !doc) {
@@ -1497,10 +2358,14 @@ serve(async (req) => {
       // GET session details
       if (!subPath && method === 'GET') {
         try {
+          // Get current user ID and validate ownership
+          const userId = await getCurrentUserId(req) || await getOrCreateFreeUser()
+          
           const { data: session, error } = await supabase
             .from('qa_sessions')
             .select('*, documents(id, title, original_filename, file_size, mime_type, created_at)')
             .eq('id', sessionId)
+            .eq('user_id', userId)  // Validate ownership (like backend)
             .single()
           
           if (error || !session) {
@@ -1525,11 +2390,15 @@ serve(async (req) => {
       // DELETE session with cascade
       if (!subPath && method === 'DELETE') {
         try {
-          // Get session to find document
+          // Get current user ID and validate ownership
+          const userId = await getCurrentUserId(req) || await getOrCreateFreeUser()
+          
+          // Get session to find document and validate ownership
           const { data: session } = await supabase
             .from('qa_sessions')
-            .select('document_id')
+            .select('document_id, user_id')
             .eq('id', sessionId)
+            .eq('user_id', userId)  // Validate ownership (like backend)
             .single()
           
           if (!session) {
@@ -1603,11 +2472,15 @@ serve(async (req) => {
       // POST cleanup session
       if (subPath === 'cleanup' && method === 'POST') {
         try {
+          // Get current user ID and validate ownership
+          const userId = await getCurrentUserId(req) || await getOrCreateFreeUser()
+          
           // Same as DELETE but without removing the session itself
           const { data: session } = await supabase
             .from('qa_sessions')
-            .select('document_id')
+            .select('document_id, user_id')
             .eq('id', sessionId)
+            .eq('user_id', userId)  // Validate ownership (like backend)
             .single()
           
           if (!session) {
@@ -1644,6 +2517,18 @@ serve(async (req) => {
       // GET session questions
       if (subPath === 'questions' && method === 'GET') {
         try {
+          // Get current user ID and validate session ownership
+          const userId = await getCurrentUserId(req) || await getOrCreateFreeUser()
+          
+          // Verify session ownership first (like backend)
+          const isOwner = await validateSessionOwnership(sessionId, userId)
+          if (!isOwner) {
+            return new Response(
+              JSON.stringify({ error: 'Session not found' }),
+              { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 404 }
+            )
+          }
+          
           const { data: questions, error } = await supabase
             .from('qa_questions')
             .select('*')
@@ -1678,6 +2563,23 @@ serve(async (req) => {
       try {
         const questionId = Number(qaFeedbackMatch[1])
         const payload = await req.json()
+        
+        // Get current user ID and validate question ownership (like backend)
+        const userId = await getCurrentUserId(req) || await getOrCreateFreeUser()
+        
+        // Verify question belongs to user's session
+        const { data: question, error: qError } = await supabase
+          .from('qa_questions')
+          .select('session_id, qa_sessions!inner(user_id)')
+          .eq('id', questionId)
+          .single()
+        
+        if (qError || !question || (question as any).qa_sessions?.user_id !== userId) {
+          return new Response(
+            JSON.stringify({ error: 'Question not found' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 404 }
+          )
+        }
         
         const { error } = await supabase
           .from('qa_questions')
@@ -1862,6 +2764,7 @@ serve(async (req) => {
         
         // Upload to Supabase storage (bucket name: legal-assistant)
         let fileBuffer, uploadError, urlData
+        let bucketName = 'legal-assistant' // Initialize at outer scope
 
         try {
           console.log('📦 Converting file to buffer...')
@@ -1870,7 +2773,6 @@ serve(async (req) => {
 
           // Try multiple bucket names in order
           const bucketNames = ['legal-assistant', 'legal-documents', 'documents']
-          let bucketName = 'legal-assistant'
           let uploadResult
 
           for (const name of bucketNames) {
@@ -2043,28 +2945,86 @@ serve(async (req) => {
           console.log(`✅ Document created with ID: ${document.id}`)
           console.log('✅ Document already marked as processed')
 
-          // Create document chunks
-          console.log('📦 Creating document chunks...')
+          // Create document chunks with embeddings
+          console.log('📦 Creating document chunks with embeddings...')
           const chunks = chunkText(extractedText, 800, 160)
           
           if (chunks.length > 0) {
-            const chunkRecords = chunks.map((content, index) => ({
-              document_id: document.id,
-              chunk_index: index,
-              content: content,
-              word_count: content.split(' ').length,
-              character_count: content.length
+            // Generate embeddings for chunks in parallel (with rate limiting)
+            console.log(`🔍 Generating embeddings for ${chunks.length} chunks...`)
+            const chunkRecords = await Promise.all(chunks.map(async (content, index) => {
+              let embedding: number[] | null = null
+              let hasEmbedding = false
+              
+              // Try to generate embedding using Google's Text Embedding API
+              try {
+                // Add small delay to avoid rate limits
+                if (index > 0 && index % 10 === 0) {
+                  await new Promise(resolve => setTimeout(resolve, 100))
+                }
+                
+                embedding = await generateEmbeddingGoogle(content)
+                hasEmbedding = embedding.length > 0
+                if (hasEmbedding && index % 10 === 0) { // Log every 10th chunk
+                  console.log(`✅ Generated embedding for chunk ${index}/${chunks.length} (${embedding.length} dimensions)`)
+                }
+              } catch (e) {
+                // Silently fail - embeddings are optional, will use keyword search fallback
+                if (index === 0) {
+                  console.warn(`⚠️ Embedding generation not available, continuing without embeddings`)
+                }
+              }
+              
+              const record: any = {
+                document_id: document.id,
+                chunk_index: index,
+                content: content,
+                word_count: content.split(' ').length,
+                character_count: content.length,
+                has_embedding: hasEmbedding
+              }
+              
+              // Add embedding vector if available (for pgvector)
+              // Note: Supabase's pgvector expects the embedding_vec column to be of type vector
+              // We'll store as string representation and let SQL cast it, or use RPC
+              if (hasEmbedding && embedding) {
+                // Store embedding for vector search
+                // In Supabase, we need to use a function or direct SQL to insert vector type
+                // For now, we'll store the embedding string representation
+                record.embedding_vec = embedding // Supabase will handle the vector type conversion
+              }
+              
+              return record
             }))
             
+            // Insert chunks with embeddings
+            // Note: If embedding_vec column doesn't support direct insert, we may need to use RPC
             const { error: chunkError } = await supabase
               .from('document_chunks')
               .insert(chunkRecords)
             
             if (chunkError) {
               console.error('⚠️ Failed to create chunks:', chunkError)
-              // Don't fail the upload if chunk creation fails
+              // If embedding_vec insert fails, try without embeddings
+              if (chunkError.message?.includes('embedding') || chunkError.message?.includes('vector')) {
+                console.warn('⚠️ Retrying chunk insert without embeddings...')
+                const chunksWithoutEmbeddings = chunkRecords.map(({ embedding_vec, has_embedding, ...rest }) => rest)
+                const { error: retryError } = await supabase
+                  .from('document_chunks')
+                  .insert(chunksWithoutEmbeddings)
+                
+                if (retryError) {
+                  console.error('⚠️ Failed to create chunks even without embeddings:', retryError)
+                } else {
+                  console.log(`✅ Created ${chunks.length} chunks (without embeddings)`)
+                }
+              } else {
+                // Don't fail the upload if chunk creation fails
+                console.warn('⚠️ Continuing without chunks')
+              }
             } else {
-              console.log(`✅ Created ${chunks.length} chunks for document ${document.id}`)
+              const embeddedCount = chunkRecords.filter(r => r.has_embedding).length
+              console.log(`✅ Created ${chunks.length} chunks for document ${document.id} (${embeddedCount} with embeddings)`)
             }
           }
 
