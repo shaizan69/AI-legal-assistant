@@ -759,16 +759,71 @@ async function searchSimilarVectors(
   }
 }
 
-// Generate embedding using Google's Text Embedding API (alternative to InLegalBERT)
+// Get Hugging Face API key for InLegalBERT
+const HUGGINGFACE_API_KEY = Deno.env.get('HUGGINGFACE_API_KEY')
+
+// Generate embedding using InLegalBERT via Hugging Face API (primary) or Google's Text Embedding API (fallback)
 async function generateEmbeddingGoogle(text: string): Promise<number[]> {
   try {
-    // Check if we have Google API key for embeddings
+    // First try InLegalBERT via Hugging Face API
+    if (HUGGINGFACE_API_KEY) {
+      console.log('🏛️ Attempting to use InLegalBERT for legal document embeddings...')
+      
+      const hfResponse = await fetch(
+        'https://api-inference.huggingface.co/models/law-ai/InLegalBERT',
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${HUGGINGFACE_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            inputs: text,
+            options: { 
+              wait_for_model: true,
+              use_cache: true
+            }
+          })
+        }
+      )
+
+      if (hfResponse.ok) {
+        const embeddings = await hfResponse.json()
+        // InLegalBERT returns embeddings in a nested array format
+        // The response format is typically [[embedding_vector]]
+        if (Array.isArray(embeddings) && embeddings.length > 0) {
+          let embedding = embeddings
+          // Handle nested array response
+          while (Array.isArray(embedding) && embedding.length === 1 && Array.isArray(embedding[0])) {
+            embedding = embedding[0]
+          }
+          
+          if (Array.isArray(embedding) && embedding.length === 768) {
+            console.log(`✅ InLegalBERT embedding generated (${embedding.length} dims)`)
+            return embedding
+          } else {
+            console.warn(`⚠️ Unexpected InLegalBERT embedding format: ${Array.isArray(embedding) ? embedding.length : 'not array'} dims`)
+          }
+        }
+      } else {
+        const error = await hfResponse.text()
+        if (hfResponse.status === 503) {
+          console.warn('⚠️ InLegalBERT model is loading, falling back to Google embeddings')
+        } else {
+          console.warn(`⚠️ InLegalBERT API error (${hfResponse.status}): ${error}`)
+        }
+      }
+    }
+
+    // Fallback to Google Text Embedding API
     const GOOGLE_API_KEY = Deno.env.get('GOOGLE_API_KEY') || GEMINI_API_KEY
     
     if (!GOOGLE_API_KEY) {
-      console.warn('⚠️ No Google API key for embeddings, using keyword fallback')
+      console.warn('⚠️ No API keys available for embeddings (neither HuggingFace nor Google)')
       return []
     }
+    
+    console.log('🔄 Using Google Text Embedding API as fallback')
     
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1/models/text-embedding-004:embedContent?key=${GOOGLE_API_KEY}`,
@@ -783,14 +838,19 @@ async function generateEmbeddingGoogle(text: string): Promise<number[]> {
     )
     
     if (!response.ok) {
-      console.warn('⚠️ Google embedding API failed, using keyword fallback')
+      console.warn('⚠️ Google embedding API also failed')
       return []
     }
     
     const data = await response.json()
-    return data.embedding?.values || []
+    const googleEmbedding = data.embedding?.values || []
+    if (googleEmbedding.length > 0) {
+      console.log(`✅ Google embedding generated (${googleEmbedding.length} dims)`)
+    }
+    return googleEmbedding
+    
   } catch (e) {
-    console.warn('⚠️ Embedding generation error, using keyword fallback:', e)
+    console.error('❌ Embedding generation error:', e)
     return []
   }
 }
@@ -822,141 +882,164 @@ function chunkText(text: string, chunkSize: number = 800, overlap: number = 160)
 }
 
 
-// PDF text extraction function with advanced filtering
+// PDF text extraction function - simplified approach without external dependencies
 async function extractTextFromPDF(fileBuffer: ArrayBuffer, filename: string): Promise<string> {
   try {
     console.log('📄 Starting PDF text extraction...')
     
-    // Convert ArrayBuffer to Uint8Array
     const uint8Array = new Uint8Array(fileBuffer)
     
-    // Decode using Latin1 to preserve byte values
-    const rawText = new TextDecoder('latin1', { fatal: false }).decode(uint8Array)
+    // Convert to string using latin1 encoding (preserves byte values)
+    const pdfContent = Array.from(uint8Array).map(byte => String.fromCharCode(byte)).join('')
     
-    // Extract text from PDF content streams
-    const extractedParts: string[] = []
+    // Extract text parts
+    const textParts: string[] = []
     
-    // Method 1: Extract text from TJ/Tj operators (text showing operators in PDF)
-    // Pattern: [(text)] TJ or (text) Tj
-    const tjPattern = /\[?\(([^()]{2,}?)\)\]?\s*T[Jj]/g
+    // Method 1: Extract text between BT...ET blocks (text objects)
+    const btEtPattern = /BT\s*([\s\S]*?)\s*ET/g
     let match
-    while ((match = tjPattern.exec(rawText)) !== null) {
-      const text = match[1]
-      if (text && text.length > 2) {
-        extractedParts.push(text)
-      }
-    }
-    
-    // Method 2: Extract text from parentheses in content streams
-    // More comprehensive than Method 1
-    const parenPattern = /\(([^()]{3,}?)\)/g
-    while ((match = parenPattern.exec(rawText)) !== null) {
-      const text = match[1]
-      // Only include if it looks like text (contains letters)
-      if (text && /[a-zA-Z]{2,}/i.test(text)) {
-        extractedParts.push(text)
-      }
-    }
-    
-    // Method 3: Extract from BT/ET blocks (text objects)
-    const btEtPattern = /BT\s+([\s\S]*?)\s+ET/g
-    while ((match = btEtPattern.exec(rawText)) !== null) {
+    while ((match = btEtPattern.exec(pdfContent)) !== null) {
       const block = match[1]
-      // Extract text from this block
-      const blockTextPattern = /\(([^()]+)\)/g
-      let blockMatch
-      while ((blockMatch = blockTextPattern.exec(block)) !== null) {
-        const text = blockMatch[1]
-        if (text && /[a-zA-Z]{2,}/i.test(text)) {
-          extractedParts.push(text)
+      
+      // Extract strings from Tj and TJ operators
+      // Handle (string) Tj format
+      const tjPattern = /\(([^)]*)\)\s*Tj/g
+      let tjMatch
+      while ((tjMatch = tjPattern.exec(block)) !== null) {
+        const text = cleanPDFString(tjMatch[1])
+        if (text && text.length >= 2) {
+          textParts.push(text)
+        }
+      }
+      
+      // Handle [(string)] TJ format (array of strings)
+      const tjArrayPattern = /\[(.*?)\]\s*TJ/g
+      let tjArrayMatch
+      while ((tjArrayMatch = tjArrayPattern.exec(block)) !== null) {
+        const arrayContent = tjArrayMatch[1]
+        const stringPattern = /\(([^)]*)\)/g
+        let stringMatch
+        while ((stringMatch = stringPattern.exec(arrayContent)) !== null) {
+          const text = cleanPDFString(stringMatch[1])
+          if (text && text.length >= 2) {
+            textParts.push(text)
+          }
         }
       }
     }
     
-    console.log(`🔍 Found ${extractedParts.length} text fragments`)
-    
-    // Process and clean all extracted parts
-    const cleanedParts: string[] = []
-    
-    for (const part of extractedParts) {
-      // Decode PDF escape sequences
-      let cleaned = part
-        .replace(/\\n/g, '\n')
-        .replace(/\\r/g, '\r')
-        .replace(/\\t/g, '\t')
-        .replace(/\\\(/g, '(')
-        .replace(/\\\)/g, ')')
-        .replace(/\\\\/g, '\\')
-        .replace(/\\(\d{3})/g, (_, octal) => String.fromCharCode(parseInt(octal, 8)))
-      
-      // Remove non-printable characters but keep newlines
-      cleaned = cleaned.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')
-      
-      // Normalize whitespace
-      cleaned = cleaned.replace(/\s+/g, ' ').trim()
-      
-      // Only keep parts that look like real text
-      // Must have at least 2 letters and be at least 3 characters
-      if (cleaned.length >= 3 && /[a-zA-Z]{2,}/i.test(cleaned)) {
-        // Filter out common PDF syntax
-        if (!/^(obj|endobj|stream|endstream|xref|trailer|Type|Font|Page|Pages|XObject|Catalog|Encoding)$/i.test(cleaned)) {
-          cleanedParts.push(cleaned)
-        }
+    // Method 2: Direct text extraction from content streams
+    // Look for text in parentheses that might not be in BT/ET blocks
+    const directTextPattern = /\(([^)]{2,})\)\s*[Tj]/g
+    while ((match = directTextPattern.exec(pdfContent)) !== null) {
+      const text = cleanPDFString(match[1])
+      if (text && text.length >= 3 && /[a-zA-Z0-9]/.test(text)) {
+        textParts.push(text)
       }
     }
+    
+    console.log(`🔍 Found ${textParts.length} text fragments`)
+    
+    // Clean and filter text parts
+    const cleanedParts = textParts
+      .map(part => part.trim())
+      .filter(part => part.length >= 2 && /[a-zA-Z0-9]/.test(part))
+      // Remove common PDF commands/keywords
+      .filter(part => !/(^|\s)(obj|endobj|stream|endstream|xref|trailer|startxref|%%EOF)(\s|$)/i.test(part))
     
     console.log(`✅ Cleaned to ${cleanedParts.length} valid text parts`)
     
     if (cleanedParts.length === 0) {
-      console.log('⚠️ No text extracted, PDF may be image-based')
-      return `PDF document "${filename}" uploaded. The document appears to be image-based or contains no extractable text. For best results, please use text-based PDF documents.`
-    }
-    
-    // Join parts intelligently
-    let fullText = ''
-    for (let i = 0; i < cleanedParts.length; i++) {
-      const part = cleanedParts[i]
-      const nextPart = cleanedParts[i + 1]
+      console.log('⚠️ No text extracted, trying alternative method...')
       
-      fullText += part
-      
-      // Add spacing between parts
-      if (nextPart) {
-        // If current part ends with punctuation or next starts with capital, add space
-        if (/[.!?:]$/.test(part) || /^[A-Z]/.test(nextPart)) {
-          fullText += ' '
-        } else {
-          fullText += ' '
+      // Alternative: Look for any text in parentheses (more permissive)
+      const anyTextPattern = /\(([^)]{3,})\)/g
+      const altTextParts: string[] = []
+      let altMatch
+      while ((altMatch = anyTextPattern.exec(pdfContent)) !== null) {
+        const text = cleanPDFString(altMatch[1])
+        if (text && text.length >= 3 && /[a-zA-Z]/.test(text)) {
+          altTextParts.push(text)
         }
+      }
+      
+      if (altTextParts.length > 0) {
+        console.log(`🔄 Alternative method found ${altTextParts.length} text parts`)
+        cleanedParts.push(...altTextParts)
+      } else {
+        console.log('⚠️ No text extracted even with alternative method')
+        return `PDF document "${filename}" uploaded. The document appears to be image-based, encrypted, or contains no extractable text. For best results, please use text-based PDF documents.`
       }
     }
     
+    // Join parts intelligently
+    let fullText = cleanedParts.join(' ')
+    
     // Final cleanup
     fullText = fullText
-      .replace(/\s+/g, ' ')
-      .replace(/ ([.,;:!?])/g, '$1')
-      .replace(/\(\s+/g, '(')
+      .replace(/\s+/g, ' ')  // Normalize whitespace
+      .replace(/ ([.,;:!?])/g, '$1')  // Fix punctuation spacing
+      .replace(/\(\s+/g, '(')  // Fix parentheses
       .replace(/\s+\)/g, ')')
       .trim()
     
     console.log(`📊 Final extracted text: ${fullText.length} characters`)
+    console.log(`📝 Text preview: ${fullText.substring(0, 200)}...`)
     
     if (fullText.length < 50) {
       return `PDF document "${filename}" uploaded. Extracted minimal text (${fullText.length} chars). The document may be image-based or heavily formatted.`
     }
     
-    // Limit to 20000 characters to prevent token issues
-    if (fullText.length > 20000) {
-      console.log(`⚠️ Text too long (${fullText.length} chars), truncating to 20000`)
-      fullText = fullText.substring(0, 20000) + '...[truncated]'
+    // Limit to 100000 characters to prevent issues
+    if (fullText.length > 100000) {
+      console.log(`⚠️ Text too long (${fullText.length} chars), truncating to 100000`)
+      fullText = fullText.substring(0, 100000) + '...[truncated]'
     }
     
     return fullText
     
   } catch (error) {
     console.error('❌ PDF extraction failed:', error)
-    return `PDF document "${filename}" uploaded. Text extraction encountered an error: ${error.message}. The document has been stored but text extraction failed.`
+    return `PDF document "${filename}" uploaded. Text extraction encountered an error: ${error.message}. The document has been stored but may not be fully searchable.`
   }
+}
+
+// Helper function to clean PDF strings
+function cleanPDFString(str: string): string {
+  if (!str) return ''
+  
+  // Decode common PDF escape sequences
+  let cleaned = str
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\r')
+    .replace(/\\t/g, '\t')
+    .replace(/\\\(/g, '(')
+    .replace(/\\\)/g, ')')
+    .replace(/\\\\/g, '\\')
+    .replace(/\\'/g, "'")
+    .replace(/\\"/g, '"')
+    // Decode octal sequences (e.g., \040 = space)
+    .replace(/\\(\d{1,3})/g, (_, octal) => {
+      const code = parseInt(octal, 8)
+      return code <= 255 ? String.fromCharCode(code) : ''
+    })
+    // Decode hex sequences (e.g., <48656C6C6F> = "Hello")
+    .replace(/<([0-9A-Fa-f]+)>/g, (_, hex) => {
+      let result = ''
+      for (let i = 0; i < hex.length; i += 2) {
+        const code = parseInt(hex.substr(i, 2), 16)
+        if (code <= 255) result += String.fromCharCode(code)
+      }
+      return result
+    })
+  
+  // Remove control characters but keep basic whitespace
+  cleaned = cleaned.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')
+  
+  // Normalize whitespace
+  cleaned = cleaned.replace(/\s+/g, ' ').trim()
+  
+  return cleaned
 }
 
 // Test database connection on startup
