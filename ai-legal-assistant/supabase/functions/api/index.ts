@@ -1471,9 +1471,34 @@ serve(async (req) => {
           console.warn('⚠️ Vector search failed, using keyword fallback:', e)
         }
         
-        // Fallback to keyword-based search if vector search didn't find enough results
+        // Optional Postgres full-text search fallback to enrich candidates
+        if (candidateIndices.size < 5) {
+          try {
+            const { data: ftsChunks } = await supabase
+              .from('document_chunks')
+              .select('chunk_index')
+              .eq('document_id', document.id)
+              .textSearch('content', question, { type: 'plain' })
+              .limit(isMoney ? 25 : 15)
+            if (ftsChunks && ftsChunks.length > 0) {
+              console.log(`🔎 FTS found ${ftsChunks.length} chunks`)
+              for (const ch of ftsChunks) {
+                const idx = (ch as any).chunk_index
+                candidateIndices.add(idx)
+                const spread = isMoney ? 3 : 2
+                for (let i = -spread; i <= spread; i++) {
+                  candidateIndices.add(idx + i)
+                }
+              }
+            }
+          } catch (e) {
+            console.log('ℹ️ FTS not available, skipping')
+          }
+        }
+
+        // Fallback to keyword-based search if still not enough
         if (candidateIndices.size < 5 && allChunks) {
-          console.log('📊 Q&A: Using keyword-based chunk selection (vector search unavailable)')
+          console.log('📊 Q&A: Using keyword-based chunk selection (vector/FTS unavailable)')
           // Get base chunks (first 15 for semantic search simulation, or more for financial)
           const baseK = isMoney ? 25 : 15
           const baseChunks = allChunks.slice(0, baseK)
@@ -1607,6 +1632,7 @@ serve(async (req) => {
             user_rating: null,
             feedback: null,
             token_count: result.answer.length + context.length,
+            citations: Array.from(new Set(selectedChunks.map(ch => ch.chunk_index))),
             // Legacy fields for compatibility
             confidence: result.confidence,
             timestamp: result.timestamp
@@ -1825,9 +1851,34 @@ serve(async (req) => {
           console.warn('⚠️ Vector search failed, using keyword fallback:', e)
         }
         
-        // Fallback to keyword-based search if vector search didn't find enough results
+        // Optional Postgres full-text search fallback to enrich candidates (Free)
+        if (candidateIndices.size < 5) {
+          try {
+            const { data: ftsChunks } = await supabase
+              .from('document_chunks')
+              .select('chunk_index')
+              .eq('document_id', document.id)
+              .textSearch('content', question, { type: 'plain' })
+              .limit(isMoney ? 25 : 15)
+            if (ftsChunks && ftsChunks.length > 0) {
+              console.log(`🔎 Free FTS found ${ftsChunks.length} chunks`)
+              for (const ch of ftsChunks) {
+                const idx = (ch as any).chunk_index
+                candidateIndices.add(idx)
+                const spread = isMoney ? 3 : 2
+                for (let i = -spread; i <= spread; i++) {
+                  candidateIndices.add(idx + i)
+                }
+              }
+            }
+          } catch (e) {
+            console.log('ℹ️ Free FTS not available, skipping')
+          }
+        }
+
+        // Fallback to keyword-based search if still not enough results
         if (candidateIndices.size < 5 && allChunks) {
-          console.log('📊 Free Q&A: Using keyword-based chunk selection (vector search unavailable)')
+          console.log('📊 Free Q&A: Using keyword-based chunk selection (vector/FTS unavailable)')
           // Get base chunks (first 15 for semantic search simulation, or more for financial)
           const baseK = isMoney ? 25 : 15
           const baseChunks = allChunks.slice(0, baseK)
@@ -1961,6 +2012,7 @@ serve(async (req) => {
             user_rating: null,
             feedback: null,
             token_count: result.answer.length + context.length,
+            citations: Array.from(new Set(selectedChunks.map(ch => ch.chunk_index))),
             // Legacy fields for compatibility
             confidence: result.confidence,
             timestamp: result.timestamp
@@ -2170,6 +2222,55 @@ serve(async (req) => {
         console.error('Session creation error:', e)
         return new Response(
           JSON.stringify({ error: 'Failed to create session', details: String(e) }), 
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+        )
+      }
+    }
+
+    // Get latest active free session (optional document filter)
+    if (path === '/free/session' && method === 'GET') {
+      try {
+        const urlObj = new URL(req.url)
+        const documentIdParam = urlObj.searchParams.get('document_id')
+        const documentId = documentIdParam ? Number(documentIdParam) : undefined
+
+        // Get or create free user
+        let userId = 1
+        const { data: existingUser } = await supabase
+          .from('users')
+          .select('id')
+          .eq('email', 'free@system.local')
+          .single()
+        if (existingUser) userId = existingUser.id
+
+        let query = supabase
+          .from('qa_sessions')
+          .select('id, document_id, session_name, is_active, created_at, updated_at, last_activity, total_questions')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+
+        if (documentId) {
+          query = query.eq('document_id', documentId)
+        }
+
+        const { data: sessions, error } = await query
+
+        if (error) {
+          return new Response(
+            JSON.stringify({ error: 'Failed to fetch session', details: error.message }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+          )
+        }
+
+        const session = sessions && sessions.length > 0 ? sessions[0] : null
+        return new Response(
+          JSON.stringify(session),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
+        )
+      } catch (e) {
+        return new Response(
+          JSON.stringify({ error: 'Failed to fetch session', details: String(e) }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
         )
       }
