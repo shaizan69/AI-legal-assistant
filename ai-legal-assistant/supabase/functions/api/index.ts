@@ -236,28 +236,9 @@ class GeminiLLMService {
     }
   }
 
-  // Helper function to chunk text (like backend)
+  // Helper function to chunk text (delegates to global chunkText function)
   private chunkText(text: string, chunkSize: number = 800, overlap: number = 160): string[] {
-    if (!text || text.length === 0) {
-      return []
-    }
-    
-    console.log(`📝 Chunking text: ${text.length} chars, chunk_size=${chunkSize}, overlap=${overlap}`)
-    
-    // Split by words
-    const words = text.split(/\s+/)
-    const chunks: string[] = []
-    
-    // Create overlapping chunks
-    for (let i = 0; i < words.length; i += chunkSize - overlap) {
-      const chunk = words.slice(i, i + chunkSize).join(' ')
-      if (chunk.trim()) {
-        chunks.push(chunk.trim())
-      }
-    }
-    
-    console.log(`✅ Created ${chunks.length} chunks`)
-    return chunks
+    return chunkTextGlobal(text, chunkSize, overlap)
   }
 
   async answerQuestion(question: string, context: string): Promise<any> {
@@ -762,284 +743,330 @@ async function searchSimilarVectors(
 // Get Hugging Face API key for InLegalBERT
 const HUGGINGFACE_API_KEY = Deno.env.get('HUGGINGFACE_API_KEY')
 
-// Generate embedding using InLegalBERT via Hugging Face API (primary) or Google's Text Embedding API (fallback)
+// Generate embedding using ONLY InLegalBERT via Hugging Face API
 async function generateEmbeddingGoogle(text: string): Promise<number[]> {
+  if (!HUGGINGFACE_API_KEY) {
+    console.error('❌ HUGGINGFACE_API_KEY is required for InLegalBERT embeddings. Please set it in Supabase Dashboard Secrets.')
+    throw new Error('HUGGINGFACE_API_KEY is required. Please set it in Supabase Dashboard Secrets to use InLegalBERT embeddings.')
+  }
+  
   try {
-    // First try InLegalBERT via Hugging Face API
-    if (HUGGINGFACE_API_KEY) {
-      console.log('🏛️ Attempting to use InLegalBERT for legal document embeddings...')
-      
-      const hfResponse = await fetch(
-        'https://api-inference.huggingface.co/models/law-ai/InLegalBERT',
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${HUGGINGFACE_API_KEY}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            inputs: text,
-            options: { 
-              wait_for_model: true,
-              use_cache: true
-            }
-          })
-        }
-      )
-
-      if (hfResponse.ok) {
-        const embeddings = await hfResponse.json()
-        // InLegalBERT returns embeddings in a nested array format
-        // The response format is typically [[embedding_vector]]
-        if (Array.isArray(embeddings) && embeddings.length > 0) {
-          let embedding = embeddings
-          // Handle nested array response
-          while (Array.isArray(embedding) && embedding.length === 1 && Array.isArray(embedding[0])) {
-            embedding = embedding[0]
-          }
-          
-          if (Array.isArray(embedding) && embedding.length === 768) {
-            console.log(`✅ InLegalBERT embedding generated (${embedding.length} dims)`)
-            return embedding
-          } else {
-            console.warn(`⚠️ Unexpected InLegalBERT embedding format: ${Array.isArray(embedding) ? embedding.length : 'not array'} dims`)
-          }
-        }
-      } else {
-        const error = await hfResponse.text()
-        if (hfResponse.status === 503) {
-          console.warn('⚠️ InLegalBERT model is loading, falling back to Google embeddings')
-        } else {
-          console.warn(`⚠️ InLegalBERT API error (${hfResponse.status}): ${error}`)
-        }
-      }
-    }
-
-    // Fallback to Google Text Embedding API
-    const GOOGLE_API_KEY = Deno.env.get('GOOGLE_API_KEY') || GEMINI_API_KEY
+    console.log('🏛️ Using InLegalBERT for legal document embeddings...')
     
-    if (!GOOGLE_API_KEY) {
-      console.warn('⚠️ No API keys available for embeddings (neither HuggingFace nor Google)')
-      return []
-    }
-    
-    console.log('🔄 Using Google Text Embedding API as fallback')
-    
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1/models/text-embedding-004:embedContent?key=${GOOGLE_API_KEY}`,
+    const hfResponse = await fetch(
+      'https://api-inference.huggingface.co/models/law-ai/InLegalBERT',
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Authorization': `Bearer ${HUGGINGFACE_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({
-          model: 'models/text-embedding-004',
-          content: { parts: [{ text }] }
+          inputs: text,
+          options: { 
+            wait_for_model: true,
+            use_cache: true
+          }
         })
       }
     )
-    
-    if (!response.ok) {
-      console.warn('⚠️ Google embedding API also failed')
-      return []
+
+    if (!hfResponse.ok) {
+      const error = await hfResponse.text()
+      if (hfResponse.status === 503) {
+        throw new Error('InLegalBERT model is currently loading. Please wait a moment and try again.')
+      } else {
+        throw new Error(`InLegalBERT API error (${hfResponse.status}): ${error}`)
+      }
     }
+
+    const embeddings = await hfResponse.json()
     
-    const data = await response.json()
-    const googleEmbedding = data.embedding?.values || []
-    if (googleEmbedding.length > 0) {
-      console.log(`✅ Google embedding generated (${googleEmbedding.length} dims)`)
+    // InLegalBERT returns embeddings in a nested array format
+    // The response format is typically [[embedding_vector]]
+    if (Array.isArray(embeddings) && embeddings.length > 0) {
+      let embedding = embeddings
+      // Handle nested array response
+      while (Array.isArray(embedding) && embedding.length === 1 && Array.isArray(embedding[0])) {
+        embedding = embedding[0]
+      }
+      
+      if (Array.isArray(embedding) && embedding.length === 768) {
+        console.log(`✅ InLegalBERT embedding generated (${embedding.length} dims)`)
+        return embedding
+      } else {
+        throw new Error(`Unexpected InLegalBERT embedding format: Expected 768 dimensions, got ${Array.isArray(embedding) ? embedding.length : 'not array'}`)
+      }
+    } else {
+      throw new Error('InLegalBERT returned empty or invalid response')
     }
-    return googleEmbedding
     
   } catch (e) {
-    console.error('❌ Embedding generation error:', e)
-    return []
+    console.error('❌ InLegalBERT embedding generation error:', e)
+    throw new Error(`Failed to generate InLegalBERT embedding: ${e.message}`)
   }
 }
 
 const embeddingService = new SimpleEmbeddingService()
 
-// Helper function to chunk text (used outside GeminiLLMService)
-function chunkText(text: string, chunkSize: number = 800, overlap: number = 160): string[] {
+// Helper function to split text by sentences
+function splitBySentences(text: string): string[] {
+  // Split by sentence endings (period, exclamation, question mark)
+  // Keep the punctuation with the sentence
+  const sentences = text.split(/([.!?]+[\s\n]+)/g)
+  const result: string[] = []
+  
+  for (let i = 0; i < sentences.length; i += 2) {
+    const sentence = sentences[i] || ''
+    const punctuation = sentences[i + 1] || ''
+    const combined = (sentence + punctuation).trim()
+    if (combined.length > 0) {
+      result.push(combined)
+    }
+  }
+  
+  return result.filter(s => s.length > 0)
+}
+
+// Helper function to chunk text with sentence-based splitting (like backend)
+function chunkTextGlobal(text: string, chunkSize: number = 800, overlap: number = 160): string[] {
   if (!text || text.length === 0) {
     return []
   }
   
-  console.log(`📝 Chunking text: ${text.length} chars, chunk_size=${chunkSize}, overlap=${overlap}`)
+  // Clean and normalize text first
+  text = text
+    .replace(/\s+/g, ' ')  // Normalize whitespace
+    .trim()
   
-  // Split by words
-  const words = text.split(/\s+/)
+  if (!text || text.length === 0) {
+    return []
+  }
+  
+  console.log(`📝 Chunking text: ${text.length} chars, chunk_size=${chunkSize} words, overlap=${overlap} words`)
+  
+  // Split text by sentences for better context preservation
+  const sentences = splitBySentences(text)
+  
+  if (sentences.length === 0) {
+    // Fallback: if no sentences found, use word-based chunking
+    return chunkTextByWords(text, chunkSize, overlap)
+  }
+  
   const chunks: string[] = []
+  let currentChunk: string[] = []
+  let currentWordCount = 0
   
-  // Create overlapping chunks
-  for (let i = 0; i < words.length; i += chunkSize - overlap) {
+  for (const sentence of sentences) {
+    const sentenceWords = sentence.split(/\s+/).filter(w => w.length > 0)
+    const sentenceWordCount = sentenceWords.length
+    
+    // If adding this sentence would exceed chunk size and we have content, create a chunk
+    if (currentWordCount + sentenceWordCount > chunkSize && currentChunk.length > 0) {
+      // Create chunk from current sentences
+      const chunkText = currentChunk.join(' ').trim()
+      if (chunkText.length > 0) {
+        chunks.push(chunkText)
+      }
+      
+      // Start new chunk with overlap (keep last N words from previous chunk)
+      const overlapWords = Math.min(overlap, currentWordCount)
+      if (overlapWords > 0) {
+        // Get last N words from previous chunk
+        const allPreviousWords = currentChunk.join(' ').split(/\s+/).filter(w => w.length > 0)
+        const overlapStart = Math.max(0, allPreviousWords.length - overlapWords)
+        currentChunk = [allPreviousWords.slice(overlapStart).join(' ')]
+        currentWordCount = overlapWords
+      } else {
+        currentChunk = []
+        currentWordCount = 0
+      }
+    }
+    
+    // Add current sentence to chunk
+    currentChunk.push(sentence)
+    currentWordCount += sentenceWordCount
+  }
+  
+  // Add remaining chunk
+  if (currentChunk.length > 0) {
+    const chunkText = currentChunk.join(' ').trim()
+    if (chunkText.length > 0) {
+      chunks.push(chunkText)
+    }
+  }
+  
+  // Fallback: If sentence-based chunking produced no chunks (edge case), use word-based
+  if (chunks.length === 0) {
+    console.log('⚠️ Sentence-based chunking produced no chunks, using word-based fallback')
+    return chunkTextByWords(text, chunkSize, overlap)
+  }
+  
+  console.log(`✅ Created ${chunks.length} chunks (avg ${Math.round(text.split(/\s+/).length / chunks.length)} words per chunk)`)
+  return chunks
+}
+
+// Fallback: Word-based chunking (original method)
+function chunkTextByWords(text: string, chunkSize: number = 800, overlap: number = 160): string[] {
+  const words = text.split(/\s+/).filter(w => w.length > 0)
+  const chunks: string[] = []
+  const step = Math.max(1, chunkSize - overlap)
+  
+  for (let i = 0; i < words.length; i += step) {
     const chunk = words.slice(i, i + chunkSize).join(' ')
     if (chunk.trim()) {
       chunks.push(chunk.trim())
     }
   }
   
-  console.log(`✅ Created ${chunks.length} chunks`)
   return chunks
 }
 
 
-// PDF text extraction function - simplified approach without external dependencies
+// Helper function to normalize extracted text
+function normalizeExtractedText(text: string): string {
+  if (!text) return ''
+  
+  return text
+    // Fix common PDF extraction issues
+    .replace(/\r\n/g, '\n')           // Normalize line endings
+    .replace(/\r/g, '\n')              // Remove carriage returns
+    .replace(/\n{3,}/g, '\n\n')       // Max 2 consecutive newlines
+    .replace(/[\u200B-\u200D\uFEFF]/g, '') // Remove zero-width spaces
+    // Fix spacing issues
+    .replace(/\s+/g, ' ')              // Normalize whitespace (but keep single spaces)
+    .replace(/ ([.,;:!?])/g, '$1')     // Fix punctuation spacing
+    .replace(/\(\s+/g, '(')            // Fix parentheses
+    .replace(/\s+\)/g, ')')
+    .replace(/\[\s+/g, '[')           // Fix brackets
+    .replace(/\s+\]/g, ']')
+    // Remove control characters but keep newlines and tabs
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')
+    .trim()
+}
+
+// PDF text extraction using proper libraries with improved error handling
 async function extractTextFromPDF(fileBuffer: ArrayBuffer, filename: string): Promise<string> {
   try {
     console.log('📄 Starting PDF text extraction...')
     
-    const uint8Array = new Uint8Array(fileBuffer)
+    let extractedText = ''
     
-    // Convert to string using latin1 encoding (preserves byte values)
-    const pdfContent = Array.from(uint8Array).map(byte => String.fromCharCode(byte)).join('')
-    
-    // Extract text parts
-    const textParts: string[] = []
-    
-    // Method 1: Extract text between BT...ET blocks (text objects)
-    const btEtPattern = /BT\s*([\s\S]*?)\s*ET/g
-    let match
-    while ((match = btEtPattern.exec(pdfContent)) !== null) {
-      const block = match[1]
+    // Method 1: Try pdf2txt first (best for complex layouts, like pdfplumber in backend)
+    try {
+      console.log('📦 Method 1: Trying pdf2txt (pdfplumber equivalent)...')
+      const { extractText } = await import('jsr:@pdf2txt/core@^0.2.0')
+      const result = await extractText(fileBuffer)
       
-      // Extract strings from Tj and TJ operators
-      // Handle (string) Tj format
-      const tjPattern = /\(([^)]*)\)\s*Tj/g
-      let tjMatch
-      while ((tjMatch = tjPattern.exec(block)) !== null) {
-        const text = cleanPDFString(tjMatch[1])
-        if (text && text.length >= 2) {
-          textParts.push(text)
-        }
-      }
-      
-      // Handle [(string)] TJ format (array of strings)
-      const tjArrayPattern = /\[(.*?)\]\s*TJ/g
-      let tjArrayMatch
-      while ((tjArrayMatch = tjArrayPattern.exec(block)) !== null) {
-        const arrayContent = tjArrayMatch[1]
-        const stringPattern = /\(([^)]*)\)/g
-        let stringMatch
-        while ((stringMatch = stringPattern.exec(arrayContent)) !== null) {
-          const text = cleanPDFString(stringMatch[1])
-          if (text && text.length >= 2) {
-            textParts.push(text)
+      if (result) {
+        let text = ''
+        
+        if (result.text && typeof result.text === 'string' && result.text.length > 100) {
+          text = result.text
+        } else if (result.pages && Object.keys(result.pages).length > 0) {
+          const pages = result.pages
+          const pageTexts = Object.keys(pages)
+            .sort((a, b) => {
+              const aNum = parseInt(a) || 0
+              const bNum = parseInt(b) || 0
+              return aNum - bNum
+            })
+            .map(pageNum => {
+              const pageText = pages[pageNum] || ''
+              return typeof pageText === 'string' ? pageText : String(pageText)
+            })
+            .filter(text => text && text.length > 0)
+          
+          if (pageTexts.length > 0) {
+            // Join with '\n' like backend (not '\n\n')
+            text = pageTexts.join('\n')
           }
         }
-      }
-    }
-    
-    // Method 2: Direct text extraction from content streams
-    // Look for text in parentheses that might not be in BT/ET blocks
-    const directTextPattern = /\(([^)]{2,})\)\s*[Tj]/g
-    while ((match = directTextPattern.exec(pdfContent)) !== null) {
-      const text = cleanPDFString(match[1])
-      if (text && text.length >= 3 && /[a-zA-Z0-9]/.test(text)) {
-        textParts.push(text)
-      }
-    }
-    
-    console.log(`🔍 Found ${textParts.length} text fragments`)
-    
-    // Clean and filter text parts
-    const cleanedParts = textParts
-      .map(part => part.trim())
-      .filter(part => part.length >= 2 && /[a-zA-Z0-9]/.test(part))
-      // Remove common PDF commands/keywords
-      .filter(part => !/(^|\s)(obj|endobj|stream|endstream|xref|trailer|startxref|%%EOF)(\s|$)/i.test(part))
-    
-    console.log(`✅ Cleaned to ${cleanedParts.length} valid text parts`)
-    
-    if (cleanedParts.length === 0) {
-      console.log('⚠️ No text extracted, trying alternative method...')
-      
-      // Alternative: Look for any text in parentheses (more permissive)
-      const anyTextPattern = /\(([^)]{3,})\)/g
-      const altTextParts: string[] = []
-      let altMatch
-      while ((altMatch = anyTextPattern.exec(pdfContent)) !== null) {
-        const text = cleanPDFString(altMatch[1])
-        if (text && text.length >= 3 && /[a-zA-Z]/.test(text)) {
-          altTextParts.push(text)
+        
+        if (text && text.length > 100) {
+          extractedText = text
+          console.log(`✅ pdf2txt extracted ${extractedText.length} characters`)
         }
       }
-      
-      if (altTextParts.length > 0) {
-        console.log(`🔄 Alternative method found ${altTextParts.length} text parts`)
-        cleanedParts.push(...altTextParts)
-      } else {
-        console.log('⚠️ No text extracted even with alternative method')
-        return `PDF document "${filename}" uploaded. The document appears to be image-based, encrypted, or contains no extractable text. For best results, please use text-based PDF documents.`
+    } catch (pdf2txtError) {
+      console.log('⚠️ pdf2txt failed:', pdf2txtError.message)
+    }
+    
+    // Method 2: Try @pdf/pdftext (faster for simple PDFs, like PyMuPDF in backend)
+    if (!extractedText || extractedText.length < 100) {
+      try {
+        console.log('📦 Method 2: Trying @pdf/pdftext (PyMuPDF equivalent)...')
+        const { pdfText } = await import('jsr:@pdf/pdftext@^1.3.2')
+        const pages = await pdfText(fileBuffer)
+        
+        if (pages && Object.keys(pages).length > 0) {
+          const pageTexts = Object.keys(pages)
+            .sort((a, b) => {
+              const aNum = parseInt(a) || 0
+              const bNum = parseInt(b) || 0
+              return aNum - bNum
+            })
+            .map(pageNum => {
+              const pageText = pages[pageNum] || ''
+              return typeof pageText === 'string' ? pageText : String(pageText)
+            })
+            .filter(text => text && text.length > 0)
+          
+          if (pageTexts.length > 0) {
+            // Join with '\n' like backend (not '\n\n')
+            const text = pageTexts.join('\n')
+            if (text.length > 100) {
+              extractedText = text
+              console.log(`✅ @pdf/pdftext extracted ${extractedText.length} characters from ${pageTexts.length} pages`)
+            }
+          }
+        }
+      } catch (pdfTextError) {
+        console.log('⚠️ @pdf/pdftext failed:', pdfTextError.message)
       }
     }
     
-    // Join parts intelligently
-    let fullText = cleanedParts.join(' ')
-    
-    // Final cleanup
-    fullText = fullText
-      .replace(/\s+/g, ' ')  // Normalize whitespace
-      .replace(/ ([.,;:!?])/g, '$1')  // Fix punctuation spacing
-      .replace(/\(\s+/g, '(')  // Fix parentheses
-      .replace(/\s+\)/g, ')')
-      .trim()
-    
-    console.log(`📊 Final extracted text: ${fullText.length} characters`)
-    console.log(`📝 Text preview: ${fullText.substring(0, 200)}...`)
-    
-    if (fullText.length < 50) {
-      return `PDF document "${filename}" uploaded. Extracted minimal text (${fullText.length} chars). The document may be image-based or heavily formatted.`
+    // Method 3: Try unpdf (specialized for LLM processing, like pymupdf4llm in backend)
+    if (!extractedText || extractedText.length < 100) {
+      try {
+        console.log('📦 Method 3: Trying unpdf (pymupdf4llm equivalent)...')
+        const { extractText } = await import('npm:unpdf@^0.3.0')
+        const text = await extractText(fileBuffer)
+        
+        if (text && typeof text === 'string' && text.length > 100) {
+          extractedText = text
+          console.log(`✅ unpdf extracted ${extractedText.length} characters`)
+        }
+      } catch (unpdfError) {
+        console.log('⚠️ unpdf failed:', unpdfError.message)
+      }
     }
     
-    // Limit to 100000 characters to prevent issues
-    if (fullText.length > 100000) {
-      console.log(`⚠️ Text too long (${fullText.length} chars), truncating to 100000`)
-      fullText = fullText.substring(0, 100000) + '...[truncated]'
+    // Validate extraction (backend checks for > 100 chars before using)
+    if (!extractedText || extractedText.length < 100) {
+      console.error('❌ All PDF extraction methods failed or returned insufficient text (< 100 chars)')
+      throw new Error(`PDF extraction failed: All methods returned insufficient text (< 100 chars). The document "${filename}" may be image-based, encrypted, or corrupted.`)
     }
     
-    return fullText
+    // Normalize the extracted text (after validation)
+    extractedText = normalizeExtractedText(extractedText)
+    console.log(`📊 Normalized text length: ${extractedText.length} characters`)
+    
+    // Limit to 100000 characters
+    if (extractedText.length > 100000) {
+      console.log(`⚠️ Text too long (${extractedText.length} chars), truncating to 100000`)
+      extractedText = extractedText.substring(0, 100000) + '...[truncated]'
+    }
+    
+    console.log(`📝 Final extracted text: ${extractedText.length} characters`)
+    console.log(`📝 Text preview: ${extractedText.substring(0, 200)}...`)
+    
+    return extractedText
     
   } catch (error) {
     console.error('❌ PDF extraction failed:', error)
-    return `PDF document "${filename}" uploaded. Text extraction encountered an error: ${error.message}. The document has been stored but may not be fully searchable.`
+    throw error // Re-throw to propagate error instead of returning success message
   }
-}
-
-// Helper function to clean PDF strings
-function cleanPDFString(str: string): string {
-  if (!str) return ''
-  
-  // Decode common PDF escape sequences
-  let cleaned = str
-    .replace(/\\n/g, '\n')
-    .replace(/\\r/g, '\r')
-    .replace(/\\t/g, '\t')
-    .replace(/\\\(/g, '(')
-    .replace(/\\\)/g, ')')
-    .replace(/\\\\/g, '\\')
-    .replace(/\\'/g, "'")
-    .replace(/\\"/g, '"')
-    // Decode octal sequences (e.g., \040 = space)
-    .replace(/\\(\d{1,3})/g, (_, octal) => {
-      const code = parseInt(octal, 8)
-      return code <= 255 ? String.fromCharCode(code) : ''
-    })
-    // Decode hex sequences (e.g., <48656C6C6F> = "Hello")
-    .replace(/<([0-9A-Fa-f]+)>/g, (_, hex) => {
-      let result = ''
-      for (let i = 0; i < hex.length; i += 2) {
-        const code = parseInt(hex.substr(i, 2), 16)
-        if (code <= 255) result += String.fromCharCode(code)
-      }
-      return result
-    })
-  
-  // Remove control characters but keep basic whitespace
-  cleaned = cleaned.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')
-  
-  // Normalize whitespace
-  cleaned = cleaned.replace(/\s+/g, ' ').trim()
-  
-  return cleaned
 }
 
 // Test database connection on startup
@@ -3078,7 +3105,7 @@ serve(async (req) => {
 
           // Create document chunks with embeddings
           console.log('📦 Creating document chunks with embeddings...')
-          const chunks = chunkText(extractedText, 800, 160)
+          const chunks = chunkTextGlobal(extractedText, 800, 160)
           
           if (chunks.length > 0) {
             // Generate embeddings for chunks in parallel (with rate limiting)
