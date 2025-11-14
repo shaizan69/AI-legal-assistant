@@ -12,6 +12,15 @@ const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
 const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
+// Polyfills for libraries that expect browser-like globals
+const globalAny = globalThis as any
+if (typeof globalAny.navigator === 'undefined') {
+  globalAny.navigator = { userAgent: 'Deno' }
+}
+if (typeof globalAny.Deno === 'object' && typeof globalAny.Deno?.test !== 'function') {
+  globalAny.Deno.test = () => {}
+}
+
 // Gemini LLM setup
 const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY')
 const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') || 'gemini-2.5-flash'
@@ -416,6 +425,89 @@ RISK ANALYSIS:`;
       throw new Error(`Failed to detect risks: ${error.message}`)
     }
   }
+
+  async summarizeDocument(text: string, documentType: string = "legal"): Promise<any> {
+    try {
+      // Clean the document text first
+      let cleanedText = this.cleanDocumentText(text)
+      
+      // Truncate text if too long
+      const MAX_CHARS = 100000  // Gemini can handle large text
+      if (cleanedText.length > MAX_CHARS) {
+        console.log(`⚠️ Document too long (${cleanedText.length} chars), truncating to ${MAX_CHARS} chars`)
+        cleanedText = cleanedText.substring(0, MAX_CHARS) + '...'
+      }
+      
+      const prompt = `Summarize the following ${documentType} document. Provide a clear, structured summary with key points.
+
+Document:
+${cleanedText}
+
+Summary:`
+
+      console.log(`📄 Summarizing ${documentType} document (${cleanedText.length} chars)`)
+      
+      const summary = await this.generateText(prompt, 500, 0.3)
+
+      return {
+        summary: summary,
+        structured: {},
+        document_type: documentType,
+        analysis_date: new Date().toISOString(),
+        model_used: this.modelName,
+        confidence: 0.8
+      }
+    } catch (error) {
+      console.error('❌ Summarization error:', error)
+      throw new Error(`Failed to summarize document: ${error.message}`)
+    }
+  }
+
+  async compareDocuments(doc1Text: string, doc2Text: string, doc1Title: string = "Document 1", doc2Title: string = "Document 2"): Promise<any> {
+    try {
+      // Clean both documents
+      let cleanedDoc1 = this.cleanDocumentText(doc1Text)
+      let cleanedDoc2 = this.cleanDocumentText(doc2Text)
+      
+      // Truncate if too long
+      const MAX_CHARS = 50000  // Gemini can handle large text
+      if (cleanedDoc1.length > MAX_CHARS) {
+        cleanedDoc1 = cleanedDoc1.substring(0, MAX_CHARS) + '...'
+      }
+      if (cleanedDoc2.length > MAX_CHARS) {
+        cleanedDoc2 = cleanedDoc2.substring(0, MAX_CHARS) + '...'
+      }
+      
+      const prompt = `Compare the following two legal documents and highlight key differences, similarities, and potential issues.
+
+${doc1Title}:
+${cleanedDoc1}
+
+${doc2Title}:
+${cleanedDoc2}
+
+Comparison Analysis:`
+
+      console.log(`📄 Comparing ${doc1Title} (${cleanedDoc1.length} chars) vs ${doc2Title} (${cleanedDoc2.length} chars)`)
+      
+      const comparison = await this.generateText(prompt, 600, 0.3)
+
+      return {
+        comparison: comparison,
+        structured: {
+          key_differences: [],
+          similarities: [],
+          recommendations: []
+        },
+        analysis_date: new Date().toISOString(),
+        model_used: this.modelName,
+        confidence: 0.8
+      }
+    } catch (error) {
+      console.error('❌ Comparison error:', error)
+      throw new Error(`Failed to compare documents: ${error.message}`)
+    }
+  }
 }
 
 // Initialize Gemini service
@@ -740,27 +832,32 @@ async function searchSimilarVectors(
   }
 }
 
-// Get Hugging Face API key for InLegalBERT
+// Get Hugging Face API key for InLegalBERT (optional - public models work without it)
 const HUGGINGFACE_API_KEY = Deno.env.get('HUGGINGFACE_API_KEY')
 
-// Generate embedding using ONLY InLegalBERT via Hugging Face API
+// Generate embedding using InLegalBERT via Hugging Face API (no API key required for public models)
 async function generateEmbeddingGoogle(text: string): Promise<number[]> {
-  if (!HUGGINGFACE_API_KEY) {
-    console.error('❌ HUGGINGFACE_API_KEY is required for InLegalBERT embeddings. Please set it in Supabase Dashboard Secrets.')
-    throw new Error('HUGGINGFACE_API_KEY is required. Please set it in Supabase Dashboard Secrets to use InLegalBERT embeddings.')
-  }
-  
   try {
     console.log('🏛️ Using InLegalBERT for legal document embeddings...')
+    
+    // Build headers - API key is optional for public models
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+    
+    // Add authorization header only if API key is provided (helps avoid rate limits)
+    if (HUGGINGFACE_API_KEY) {
+      headers['Authorization'] = `Bearer ${HUGGINGFACE_API_KEY}`
+      console.log('🔑 Using Hugging Face API key (helps avoid rate limits)')
+    } else {
+      console.log('⚠️ No API key provided - using public access (may hit rate limits)')
+    }
     
     const hfResponse = await fetch(
       'https://api-inference.huggingface.co/models/law-ai/InLegalBERT',
       {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${HUGGINGFACE_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
+        headers: headers,
         body: JSON.stringify({
           inputs: text,
           options: { 
@@ -775,6 +872,8 @@ async function generateEmbeddingGoogle(text: string): Promise<number[]> {
       const error = await hfResponse.text()
       if (hfResponse.status === 503) {
         throw new Error('InLegalBERT model is currently loading. Please wait a moment and try again.')
+      } else if (hfResponse.status === 429) {
+        throw new Error('Rate limit exceeded. Please wait a moment and try again, or set HUGGINGFACE_API_KEY to avoid rate limits.')
       } else {
         throw new Error(`InLegalBERT API error (${hfResponse.status}): ${error}`)
       }
@@ -923,6 +1022,56 @@ function chunkTextByWords(text: string, chunkSize: number = 800, overlap: number
 }
 
 
+// High-fidelity PDF text extraction using pdfjs-dist (works without native binaries)
+async function extractWithPdfjs(fileData: Uint8Array): Promise<string> {
+  try {
+    console.log('📦 Method 1: Trying pdfjs-dist (PDF.js)...')
+    const pdfjsModule: any = await import('npm:pdfjs-dist@4.4.168/legacy/build/pdf.js')
+    const pdfjsLib = pdfjsModule.default || pdfjsModule
+
+    if (pdfjsLib?.GlobalWorkerOptions && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'npm:pdfjs-dist@4.4.168/legacy/build/pdf.worker.js'
+    }
+
+    const loadingTask = pdfjsLib.getDocument({
+      data: fileData,
+      useWorkerFetch: false,
+      isEvalSupported: false,
+      disableFontFace: true
+    })
+
+    const pdfDoc = await loadingTask.promise
+    const pageTexts: string[] = []
+
+    for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
+      const page = await pdfDoc.getPage(pageNum)
+      const textContent = await page.getTextContent()
+      const pageText = textContent.items
+        ?.map((item: any) => (typeof item?.str === 'string' ? item.str : ''))
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim() || ''
+
+      if (pageText.length > 0) {
+        pageTexts.push(pageText)
+      }
+    }
+
+    await loadingTask.destroy()
+
+    if (pageTexts.length > 0) {
+      const combined = pageTexts.join('\n\n')
+      console.log(`✅ pdfjs-dist extracted ${combined.length} characters from ${pageTexts.length} pages`)
+      return combined
+    }
+
+    return ''
+  } catch (error) {
+    console.warn('⚠️ pdfjs-dist extraction failed:', (error as Error).message)
+    return ''
+  }
+}
+
 // Helper function to normalize extracted text
 function normalizeExtractedText(text: string): string {
   if (!text) return ''
@@ -952,52 +1101,26 @@ async function extractTextFromPDF(fileBuffer: ArrayBuffer, filename: string): Pr
     
     let extractedText = ''
     
-    // Method 1: Try pdf2txt first (best for complex layouts, like pdfplumber in backend)
+    // Method 1: pdfjs-dist (closest to backend pdfplumber)
     try {
-      console.log('📦 Method 1: Trying pdf2txt (pdfplumber equivalent)...')
-      const { extractText } = await import('jsr:@pdf2txt/core@^0.2.0')
-      const result = await extractText(fileBuffer)
-      
-      if (result) {
-        let text = ''
-        
-        if (result.text && typeof result.text === 'string' && result.text.length > 100) {
-          text = result.text
-        } else if (result.pages && Object.keys(result.pages).length > 0) {
-          const pages = result.pages
-          const pageTexts = Object.keys(pages)
-            .sort((a, b) => {
-              const aNum = parseInt(a) || 0
-              const bNum = parseInt(b) || 0
-              return aNum - bNum
-            })
-            .map(pageNum => {
-              const pageText = pages[pageNum] || ''
-              return typeof pageText === 'string' ? pageText : String(pageText)
-            })
-            .filter(text => text && text.length > 0)
-          
-          if (pageTexts.length > 0) {
-            // Join with '\n' like backend (not '\n\n')
-            text = pageTexts.join('\n')
-          }
-        }
-        
-        if (text && text.length > 100) {
-          extractedText = text
-          console.log(`✅ pdf2txt extracted ${extractedText.length} characters`)
-        }
+      const pdfjsText = await extractWithPdfjs(fileData)
+      if (pdfjsText && pdfjsText.length > 150) {
+        extractedText = pdfjsText
       }
-    } catch (pdf2txtError) {
-      console.log('⚠️ pdf2txt failed:', pdf2txtError.message)
+    } catch (pdfjsError) {
+      console.log('⚠️ pdfjs-dist failed:', (pdfjsError as Error).message)
     }
     
     // Method 2: Try @pdf/pdftext (faster for simple PDFs, like PyMuPDF in backend)
     if (!extractedText || extractedText.length < 100) {
       try {
         console.log('📦 Method 2: Trying @pdf/pdftext (PyMuPDF equivalent)...')
-        const { pdfText } = await import('jsr:@pdf/pdftext@^1.3.2')
-        const pages = await pdfText(fileBuffer)
+        const module = await import('jsr:@pdf/pdftext@^1.3.2')
+        const pdfTextFn = typeof module?.pdfText === 'function' ? module.pdfText : module.default
+        if (typeof pdfTextFn !== 'function') {
+          throw new Error('pdfText function not available')
+        }
+        const pages = await pdfTextFn(fileBuffer)
         
         if (pages && Object.keys(pages).length > 0) {
           const pageTexts = Object.keys(pages)
@@ -1013,7 +1136,6 @@ async function extractTextFromPDF(fileBuffer: ArrayBuffer, filename: string): Pr
             .filter(text => text && text.length > 0)
           
           if (pageTexts.length > 0) {
-            // Join with '\n' like backend (not '\n\n')
             const text = pageTexts.join('\n')
             if (text.length > 100) {
               extractedText = text
@@ -1022,23 +1144,85 @@ async function extractTextFromPDF(fileBuffer: ArrayBuffer, filename: string): Pr
           }
         }
       } catch (pdfTextError) {
-        console.log('⚠️ @pdf/pdftext failed:', pdfTextError.message)
+        console.log('⚠️ @pdf/pdftext failed:', (pdfTextError as Error).message)
       }
     }
     
-    // Method 3: Try unpdf (specialized for LLM processing, like pymupdf4llm in backend)
+    // Method 3: Try pdf2txt (complex layout fallback)
     if (!extractedText || extractedText.length < 100) {
       try {
-        console.log('📦 Method 3: Trying unpdf (pymupdf4llm equivalent)...')
-        const { extractText } = await import('npm:unpdf@^0.3.0')
-        const text = await extractText(fileBuffer)
+        console.log('📦 Method 3: Trying pdf2txt (pdfplumber-style fallback)...')
+        const module = await import('jsr:@pdf2txt/core@^0.2.0')
+        const extractTextFn = typeof module?.extractText === 'function' ? module.extractText : module.default
+        if (typeof extractTextFn !== 'function') {
+          throw new Error('extractText function not available')
+        }
+
+        const result = await extractTextFn(fileBuffer)
+        
+        if (result) {
+          let text = ''
+          
+          if (result.text && typeof result.text === 'string' && result.text.length > 100) {
+            text = result.text
+          } else if (result.pages && Object.keys(result.pages).length > 0) {
+            const pages = result.pages
+            const pageTexts = Object.keys(pages)
+              .sort((a, b) => {
+                const aNum = parseInt(a) || 0
+                const bNum = parseInt(b) || 0
+                return aNum - bNum
+              })
+              .map(pageNum => {
+                const pageText = pages[pageNum] || ''
+                return typeof pageText === 'string' ? pageText : String(pageText)
+              })
+              .filter(text => text && text.length > 0)
+            
+            if (pageTexts.length > 0) {
+              text = pageTexts.join('\n')
+            }
+          }
+          
+          if (text && text.length > 100) {
+            extractedText = text
+            console.log(`✅ pdf2txt extracted ${extractedText.length} characters`)
+          }
+        }
+      } catch (pdf2txtError) {
+        console.log('⚠️ pdf2txt failed or unavailable:', (pdf2txtError as Error).message)
+      }
+    }
+    
+    // Method 4: Try unpdf (specialized for LLM-ready markdown)
+    if (!extractedText || extractedText.length < 100) {
+      try {
+        console.log('📦 Method 4: Trying unpdf (pymupdf4llm equivalent)...')
+        const module = await import('npm:unpdf@^0.3.0')
+        const extractTextFn = typeof module?.extractText === 'function'
+          ? module.extractText
+          : typeof module?.default === 'function'
+            ? module.default
+            : null
+        
+        if (!extractTextFn) {
+          throw new Error('unpdf extractor not available')
+        }
+
+        let text: string | undefined
+        try {
+          text = await extractTextFn(fileData)
+        } catch {
+          const { Buffer } = await import('node:buffer')
+          text = await extractTextFn(Buffer.from(fileData))
+        }
         
         if (text && typeof text === 'string' && text.length > 100) {
           extractedText = text
           console.log(`✅ unpdf extracted ${extractedText.length} characters`)
         }
       } catch (unpdfError) {
-        console.log('⚠️ unpdf failed:', unpdfError.message)
+        console.log('⚠️ unpdf failed:', (unpdfError as Error).message)
       }
     }
     
@@ -3213,6 +3397,1007 @@ serve(async (req) => {
       }
     }
 
+    // ============================================================================
+    // DOCUMENT COMPARISON API
+    // ============================================================================
+
+    // Compare two documents
+    if (path === '/compare' && method === 'POST') {
+      try {
+        const authHeader = req.headers.get('authorization')
+        const userId = await getCurrentUserId(req)
+        if (!userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 401
+          })
+        }
+
+        const payload = await req.json()
+        const { document1_id, document2_id, comparison_name, comparison_type } = payload
+
+        if (!document1_id || !document2_id) {
+          return new Response(JSON.stringify({ error: 'Both document1_id and document2_id are required' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 400
+          })
+        }
+
+        // Get both documents
+        const { data: doc1, error: doc1Error } = await supabase
+          .from('documents')
+          .select('*')
+          .eq('id', document1_id)
+          .eq('owner_id', userId)
+          .single()
+
+        const { data: doc2, error: doc2Error } = await supabase
+          .from('documents')
+          .select('*')
+          .eq('id', document2_id)
+          .eq('owner_id', userId)
+          .single()
+
+        if (!doc1 || doc1Error) {
+          return new Response(JSON.stringify({ error: 'First document not found' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 404
+          })
+        }
+
+        if (!doc2 || doc2Error) {
+          return new Response(JSON.stringify({ error: 'Second document not found' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 404
+          })
+        }
+
+        if (!doc1.is_processed || !doc2.is_processed) {
+          return new Response(JSON.stringify({ error: 'One or both documents are still being processed' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 400
+          })
+        }
+
+        // Compare using Gemini
+        const startTime = Date.now()
+        const comparisonResult = await geminiService.compareDocuments(
+          doc1.extracted_text || '',
+          doc2.extracted_text || '',
+          doc1.title || `Document ${doc1.id}`,
+          doc2.title || `Document ${doc2.id}`
+        )
+        const processingTime = (Date.now() - startTime) / 1000
+
+        // Calculate similarity score (simple word-based)
+        const words1 = new Set((doc1.extracted_text || '').toLowerCase().split(/\s+/))
+        const words2 = new Set((doc2.extracted_text || '').toLowerCase().split(/\s+/))
+        const intersection = new Set([...words1].filter(x => words2.has(x)))
+        const union = new Set([...words1, ...words2])
+        const similarityScore = union.size > 0 ? intersection.size / union.size : 0
+
+        // Store comparison (Note: You need a comparisons table in the database)
+        const { data: comparison, error: comparisonError } = await supabase
+          .from('comparisons')
+          .insert({
+            user_id: userId,
+            document1_id: document1_id,
+            document2_id: document2_id,
+            comparison_name: comparison_name || `Comparison ${doc1.title} vs ${doc2.title}`,
+            summary: comparisonResult.comparison,
+            key_differences: comparisonResult.structured?.key_differences || [],
+            similarities: comparisonResult.structured?.similarities || [],
+            recommendations: comparisonResult.structured?.recommendations || [],
+            comparison_type: comparison_type || 'general',
+            similarity_score: similarityScore,
+            processing_time: processingTime,
+            model_used: comparisonResult.model_used
+          })
+          .select()
+          .single()
+
+        if (comparisonError) {
+          console.error('Error storing comparison:', comparisonError)
+        }
+
+        return new Response(JSON.stringify(comparison || {
+          summary: comparisonResult.comparison,
+          similarity_score: similarityScore,
+          processing_time: processingTime
+        }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200
+        })
+      } catch (error) {
+        console.error('Comparison error:', error)
+        return new Response(JSON.stringify({ error: 'Failed to compare documents', details: error.message }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 500
+        })
+      }
+    }
+
+    // Get specific comparison
+    if (path.match(/^\/compare\/\d+$/) && method === 'GET') {
+      try {
+        const userId = await getCurrentUserId(req)
+        if (!userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 401
+          })
+        }
+
+        const comparisonId = parseInt(path.split('/').pop() || '0')
+        const { data: comparison, error } = await supabase
+          .from('comparisons')
+          .select('*')
+          .eq('id', comparisonId)
+          .eq('user_id', userId)
+          .single()
+
+        if (error || !comparison) {
+          return new Response(JSON.stringify({ error: 'Comparison not found' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 404
+          })
+        }
+
+        return new Response(JSON.stringify(comparison), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200
+        })
+      } catch (error) {
+        console.error('Get comparison error:', error)
+        return new Response(JSON.stringify({ error: 'Failed to get comparison' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 500
+        })
+      }
+    }
+
+    // List all comparisons
+    if (path === '/compare' && method === 'GET') {
+      try {
+        const userId = await getCurrentUserId(req)
+        if (!userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 401
+          })
+        }
+
+        const { data: comparisons, error } = await supabase
+          .from('comparisons')
+          .select('*')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+
+        if (error) {
+          throw error
+        }
+
+        return new Response(JSON.stringify(comparisons || []), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200
+        })
+      } catch (error) {
+        console.error('List comparisons error:', error)
+        return new Response(JSON.stringify({ error: 'Failed to list comparisons' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 500
+        })
+      }
+    }
+
+    // Delete comparison
+    if (path.match(/^\/compare\/\d+$/) && method === 'DELETE') {
+      try {
+        const userId = await getCurrentUserId(req)
+        if (!userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 401
+          })
+        }
+
+        const comparisonId = parseInt(path.split('/').pop() || '0')
+        const { error } = await supabase
+          .from('comparisons')
+          .delete()
+          .eq('id', comparisonId)
+          .eq('user_id', userId)
+
+        if (error) {
+          throw error
+        }
+
+        return new Response(JSON.stringify({ message: 'Comparison deleted successfully' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200
+        })
+      } catch (error) {
+        console.error('Delete comparison error:', error)
+        return new Response(JSON.stringify({ error: 'Failed to delete comparison' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 500
+        })
+      }
+    }
+
+    // ============================================================================
+    // RISK ANALYSIS API (Extended)
+    // ============================================================================
+
+    // Get risk analysis for specific document
+    if (path.match(/^\/risks\/\d+$/) && method === 'GET') {
+      try {
+        const userId = await getCurrentUserId(req)
+        if (!userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 401
+          })
+        }
+
+        const documentId = parseInt(path.split('/').pop() || '0')
+        
+        // Verify document ownership
+        const { data: document } = await supabase
+          .from('documents')
+          .select('id')
+          .eq('id', documentId)
+          .eq('owner_id', userId)
+          .single()
+
+        if (!document) {
+          return new Response(JSON.stringify({ error: 'Document not found' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 404
+          })
+        }
+
+        // Get risk analyses
+        const { data: risks, error } = await supabase
+          .from('risk_analyses')
+          .select('*')
+          .eq('document_id', documentId)
+
+        if (error) {
+          throw error
+        }
+
+        if (!risks || risks.length === 0) {
+          return new Response(JSON.stringify({ error: 'No risk analysis found for this document' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 404
+          })
+        }
+
+        // Create summary
+        const totalRisks = risks.length
+        const highRisks = risks.filter(r => r.risk_level === 'High').length
+        const mediumRisks = risks.filter(r => r.risk_level === 'Medium').length
+        const lowRisks = risks.filter(r => r.risk_level === 'Low').length
+
+        return new Response(JSON.stringify({
+          document_id: documentId,
+          risks: risks,
+          summary: {
+            total_risks: totalRisks,
+            high_risks: highRisks,
+            medium_risks: mediumRisks,
+            low_risks: lowRisks,
+            overall_risk_score: totalRisks > 0 ? (highRisks * 3 + mediumRisks * 2 + lowRisks) / (totalRisks * 3) : 0,
+            recommendations: risks.map(r => r.recommendation).filter(Boolean)
+          },
+          processing_time: null
+        }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200
+        })
+      } catch (error) {
+        console.error('Get risks error:', error)
+        return new Response(JSON.stringify({ error: 'Failed to get risk analysis' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 500
+        })
+      }
+    }
+
+    // List all risk analyses
+    if (path === '/risks' && method === 'GET') {
+      try {
+        const userId = await getCurrentUserId(req)
+        if (!userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 401
+          })
+        }
+
+        const { data: risks, error } = await supabase
+          .from('risk_analyses')
+          .select('*, documents!inner(owner_id)')
+          .eq('documents.owner_id', userId)
+
+        if (error) {
+          throw error
+        }
+
+        return new Response(JSON.stringify(risks || []), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200
+        })
+      } catch (error) {
+        console.error('List risks error:', error)
+        return new Response(JSON.stringify({ error: 'Failed to list risk analyses' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 500
+        })
+      }
+    }
+
+    // Delete risk analysis
+    if (path.match(/^\/risks\/\d+$/) && method === 'DELETE') {
+      try {
+        const userId = await getCurrentUserId(req)
+        if (!userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 401
+          })
+        }
+
+        const documentId = parseInt(path.split('/').pop() || '0')
+        
+        // Verify document ownership
+        const { data: document } = await supabase
+          .from('documents')
+          .select('id')
+          .eq('id', documentId)
+          .eq('owner_id', userId)
+          .single()
+
+        if (!document) {
+          return new Response(JSON.stringify({ error: 'Document not found' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 404
+          })
+        }
+
+        // Delete all risk analyses for this document
+        const { error } = await supabase
+          .from('risk_analyses')
+          .delete()
+          .eq('document_id', documentId)
+
+        if (error) {
+          throw error
+        }
+
+        return new Response(JSON.stringify({ message: 'Risk analysis deleted successfully' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200
+        })
+      } catch (error) {
+        console.error('Delete risks error:', error)
+        return new Response(JSON.stringify({ error: 'Failed to delete risk analysis' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 500
+        })
+      }
+    }
+
+    // ============================================================================
+    // QA SESSION API (Extended)
+    // ============================================================================
+
+    // Get specific QA session
+    if (path.match(/^\/qa\/sessions\/\d+$/) && method === 'GET') {
+      try {
+        const userId = await getCurrentUserId(req)
+        if (!userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 401
+          })
+        }
+
+        const sessionId = parseInt(path.split('/')[3])
+        const { data: session, error } = await supabase
+          .from('qa_sessions')
+          .select('*')
+          .eq('id', sessionId)
+          .eq('user_id', userId)
+          .single()
+
+        if (error || !session) {
+          return new Response(JSON.stringify({ error: 'Q&A session not found' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 404
+          })
+        }
+
+        return new Response(JSON.stringify(session), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200
+        })
+      } catch (error) {
+        console.error('Get QA session error:', error)
+        return new Response(JSON.stringify({ error: 'Failed to get Q&A session' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 500
+        })
+      }
+    }
+
+    // Get questions for a session
+    if (path.match(/^\/qa\/sessions\/\d+\/questions$/) && method === 'GET') {
+      try {
+        const userId = await getCurrentUserId(req)
+        if (!userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 401
+          })
+        }
+
+        const sessionId = parseInt(path.split('/')[3])
+        
+        // Verify session ownership
+        const { data: session } = await supabase
+          .from('qa_sessions')
+          .select('id')
+          .eq('id', sessionId)
+          .eq('user_id', userId)
+          .single()
+
+        if (!session) {
+          return new Response(JSON.stringify({ error: 'Q&A session not found' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 404
+          })
+        }
+
+        // Get questions
+        const { data: questions, error } = await supabase
+          .from('qa_questions')
+          .select('*')
+          .eq('session_id', sessionId)
+          .order('created_at', { ascending: true })
+
+        if (error) {
+          throw error
+        }
+
+        return new Response(JSON.stringify(questions || []), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200
+        })
+      } catch (error) {
+        console.error('Get session questions error:', error)
+        return new Response(JSON.stringify({ error: 'Failed to get session questions' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 500
+        })
+      }
+    }
+
+    // Provide feedback on a question
+    if (path.match(/^\/qa\/questions\/\d+\/feedback$/) && method === 'PUT') {
+      try {
+        const userId = await getCurrentUserId(req)
+        if (!userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 401
+          })
+        }
+
+        const questionId = parseInt(path.split('/')[3])
+        const payload = await req.json()
+        const { is_helpful, rating, feedback } = payload
+
+        // Get question and verify ownership through session
+        const { data: question } = await supabase
+          .from('qa_questions')
+          .select('*, qa_sessions!inner(user_id)')
+          .eq('id', questionId)
+          .eq('qa_sessions.user_id', userId)
+          .single()
+
+        if (!question) {
+          return new Response(JSON.stringify({ error: 'Question not found' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 404
+          })
+        }
+
+        // Update feedback
+        const updateData: any = {}
+        if (typeof is_helpful === 'boolean') updateData.is_helpful = is_helpful
+        if (rating !== undefined) updateData.user_rating = rating
+        if (feedback) updateData.feedback = feedback
+
+        const { error } = await supabase
+          .from('qa_questions')
+          .update(updateData)
+          .eq('id', questionId)
+
+        if (error) {
+          throw error
+        }
+
+        return new Response(JSON.stringify({ message: 'Feedback recorded successfully' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200
+        })
+      } catch (error) {
+        console.error('Feedback error:', error)
+        return new Response(JSON.stringify({ error: 'Failed to record feedback' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 500
+        })
+      }
+    }
+
+    // ============================================================================
+    // DOCUMENT MANAGEMENT API
+    // ============================================================================
+
+    // List user documents with pagination
+    if (path === '/documents' && method === 'GET') {
+      try {
+        const userId = await getCurrentUserId(req)
+        if (!userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 401
+          })
+        }
+
+        const url = new URL(req.url)
+        const page = parseInt(url.searchParams.get('page') || '1')
+        const size = parseInt(url.searchParams.get('size') || '10')
+        const documentType = url.searchParams.get('document_type')
+
+        let query = supabase
+          .from('documents')
+          .select('*', { count: 'exact' })
+          .eq('owner_id', userId)
+
+        if (documentType) {
+          query = query.eq('document_type', documentType)
+        }
+
+        // Get total count
+        const { count } = await query
+
+        // Get paginated results
+        const { data: documents, error } = await query
+          .range((page - 1) * size, page * size - 1)
+          .order('created_at', { ascending: false })
+
+        if (error) {
+          throw error
+        }
+
+        const totalPages = count ? Math.ceil(count / size) : 0
+
+        return new Response(JSON.stringify({
+          documents: documents || [],
+          total: count || 0,
+          page: page,
+          size: size,
+          pages: totalPages
+        }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200
+        })
+      } catch (error) {
+        console.error('List documents error:', error)
+        return new Response(JSON.stringify({ error: 'Failed to list documents' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 500
+        })
+      }
+    }
+
+    // Get specific document
+    if (path.match(/^\/documents\/\d+$/) && method === 'GET') {
+      try {
+        const userId = await getCurrentUserId(req)
+        if (!userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 401
+          })
+        }
+
+        const documentId = parseInt(path.split('/').pop() || '0')
+        const { data: document, error } = await supabase
+          .from('documents')
+          .select('*')
+          .eq('id', documentId)
+          .eq('owner_id', userId)
+          .single()
+
+        if (error || !document) {
+          return new Response(JSON.stringify({ error: 'Document not found' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 404
+          })
+        }
+
+        return new Response(JSON.stringify(document), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200
+        })
+      } catch (error) {
+        console.error('Get document error:', error)
+        return new Response(JSON.stringify({ error: 'Failed to get document' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 500
+        })
+      }
+    }
+
+    // Delete document with cascade
+    if (path.match(/^\/documents\/\d+$/) && method === 'DELETE') {
+      try {
+        const userId = await getCurrentUserId(req)
+        if (!userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 401
+          })
+        }
+
+        const documentId = parseInt(path.split('/').pop() || '0')
+        
+        // Get document
+        const { data: document } = await supabase
+          .from('documents')
+          .select('*')
+          .eq('id', documentId)
+          .eq('owner_id', userId)
+          .single()
+
+        if (!document) {
+          return new Response(JSON.stringify({ error: 'Document not found' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 404
+          })
+        }
+
+        // Delete associated data (cascade)
+        // 1. Get session IDs for this document
+        const { data: sessions } = await supabase
+          .from('qa_sessions')
+          .select('id')
+          .eq('document_id', documentId)
+
+        if (sessions && sessions.length > 0) {
+          const sessionIds = sessions.map(s => s.id)
+          // Delete QA questions
+          await supabase.from('qa_questions').delete().in('session_id', sessionIds)
+          // Delete sessions
+          await supabase.from('qa_sessions').delete().eq('document_id', documentId)
+        }
+
+        // 2. Delete document chunks
+        await supabase.from('document_chunks').delete().eq('document_id', documentId)
+
+        // 3. Delete risk analyses
+        await supabase.from('risk_analyses').delete().eq('document_id', documentId)
+
+        // 4. Delete document analyses
+        await supabase.from('document_analyses').delete().eq('document_id', documentId)
+
+        // 5. Delete file from storage if exists
+        if (document.supabase_path) {
+          try {
+            const bucketName = document.supabase_path.startsWith('free-user/') ? 'documents' : 'documents'
+            await supabase.storage.from(bucketName).remove([document.supabase_path])
+          } catch (storageError) {
+            console.warn('Failed to delete file from storage:', storageError)
+          }
+        }
+
+        // 6. Delete document
+        const { error } = await supabase
+          .from('documents')
+          .delete()
+          .eq('id', documentId)
+
+        if (error) {
+          throw error
+        }
+
+        return new Response(JSON.stringify({ message: 'Document deleted successfully' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200
+        })
+      } catch (error) {
+        console.error('Delete document error:', error)
+        return new Response(JSON.stringify({ error: 'Failed to delete document' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 500
+        })
+      }
+    }
+
+    // ============================================================================
+    // DOCUMENT SUMMARIZATION API
+    // ============================================================================
+
+    // Generate summary
+    if (path === '/summarize' && method === 'POST') {
+      try {
+        const userId = await getCurrentUserId(req)
+        if (!userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 401
+          })
+        }
+
+        const payload = await req.json()
+        const { document_id, force_regenerate } = payload
+
+        if (!document_id) {
+          return new Response(JSON.stringify({ error: 'document_id is required' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 400
+          })
+        }
+
+        // Get document
+        const { data: document, error: docError } = await supabase
+          .from('documents')
+          .select('*')
+          .eq('id', document_id)
+          .eq('owner_id', userId)
+          .single()
+
+        if (!document || docError) {
+          return new Response(JSON.stringify({ error: 'Document not found' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 404
+          })
+        }
+
+        if (!document.is_processed) {
+          return new Response(JSON.stringify({ error: 'Document is still being processed' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 400
+          })
+        }
+
+        // Check for existing summary
+        if (!force_regenerate) {
+          const { data: existingSummary } = await supabase
+            .from('document_analyses')
+            .select('*')
+            .eq('document_id', document_id)
+            .eq('analysis_type', 'summary')
+            .single()
+
+          if (existingSummary) {
+            return new Response(JSON.stringify({
+              document_id: document.id,
+              summary: existingSummary.summary,
+              structured_summary: existingSummary.structured_data || {},
+              word_count: document.word_count,
+              analysis_date: existingSummary.created_at,
+              confidence_score: existingSummary.confidence_score,
+              processing_time: existingSummary.processing_time
+            }), {
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+              status: 200
+            })
+          }
+        }
+
+        // Generate summary
+        const startTime = Date.now()
+        const summaryResult = await geminiService.summarizeDocument(
+          document.extracted_text || '',
+          document.document_type || 'contract'
+        )
+        const processingTime = (Date.now() - startTime) / 1000
+
+        // Store summary
+        const { data: analysis, error: analysisError } = await supabase
+          .from('document_analyses')
+          .upsert({
+            document_id: document_id,
+            analysis_type: 'summary',
+            summary: summaryResult.summary,
+            structured_data: summaryResult.structured,
+            confidence_score: summaryResult.confidence,
+            model_used: summaryResult.model_used,
+            processing_time: processingTime
+          }, { onConflict: 'document_id,analysis_type' })
+          .select()
+          .single()
+
+        if (analysisError) {
+          console.error('Error storing summary:', analysisError)
+        }
+
+        return new Response(JSON.stringify({
+          document_id: document.id,
+          summary: summaryResult.summary,
+          structured_summary: summaryResult.structured,
+          word_count: document.word_count,
+          analysis_date: new Date().toISOString(),
+          confidence_score: summaryResult.confidence,
+          processing_time: processingTime
+        }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200
+        })
+      } catch (error) {
+        console.error('Summarization error:', error)
+        return new Response(JSON.stringify({ error: 'Failed to generate summary', details: error.message }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 500
+        })
+      }
+    }
+
+    // Get existing summary
+    if (path.match(/^\/summarize\/\d+$/) && method === 'GET') {
+      try {
+        const userId = await getCurrentUserId(req)
+        if (!userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 401
+          })
+        }
+
+        const documentId = parseInt(path.split('/').pop() || '0')
+        
+        // Get document
+        const { data: document, error: docError } = await supabase
+          .from('documents')
+          .select('*')
+          .eq('id', documentId)
+          .eq('owner_id', userId)
+          .single()
+
+        if (!document || docError) {
+          return new Response(JSON.stringify({ error: 'Document not found' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 404
+          })
+        }
+
+        // Get summary
+        const { data: analysis, error } = await supabase
+          .from('document_analyses')
+          .select('*')
+          .eq('document_id', documentId)
+          .eq('analysis_type', 'summary')
+          .single()
+
+        if (!analysis || error) {
+          return new Response(JSON.stringify({ error: 'No summary found for this document' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 404
+          })
+        }
+
+        return new Response(JSON.stringify({
+          document_id: document.id,
+          summary: analysis.summary,
+          structured_summary: analysis.structured_data || {},
+          word_count: document.word_count,
+          analysis_date: analysis.created_at,
+          confidence_score: analysis.confidence_score,
+          processing_time: analysis.processing_time
+        }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200
+        })
+      } catch (error) {
+        console.error('Get summary error:', error)
+        return new Response(JSON.stringify({ error: 'Failed to get summary' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 500
+        })
+      }
+    }
+
+    // List all summaries
+    if (path === '/summarize' && method === 'GET') {
+      try {
+        const userId = await getCurrentUserId(req)
+        if (!userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 401
+          })
+        }
+
+        const { data: summaries, error } = await supabase
+          .from('document_analyses')
+          .select('*, documents!inner(owner_id)')
+          .eq('analysis_type', 'summary')
+          .eq('documents.owner_id', userId)
+
+        if (error) {
+          throw error
+        }
+
+        return new Response(JSON.stringify(summaries || []), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200
+        })
+      } catch (error) {
+        console.error('List summaries error:', error)
+        return new Response(JSON.stringify({ error: 'Failed to list summaries' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 500
+        })
+      }
+    }
+
+    // Delete summary
+    if (path.match(/^\/summarize\/\d+$/) && method === 'DELETE') {
+      try {
+        const userId = await getCurrentUserId(req)
+        if (!userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 401
+          })
+        }
+
+        const documentId = parseInt(path.split('/').pop() || '0')
+        
+        // Verify document ownership
+        const { data: document } = await supabase
+          .from('documents')
+          .select('id')
+          .eq('id', documentId)
+          .eq('owner_id', userId)
+          .single()
+
+        if (!document) {
+          return new Response(JSON.stringify({ error: 'Document not found' }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 404
+          })
+        }
+
+        // Delete summary
+        const { error } = await supabase
+          .from('document_analyses')
+          .delete()
+          .eq('document_id', documentId)
+          .eq('analysis_type', 'summary')
+
+        if (error) {
+          throw error
+        }
+
+        return new Response(JSON.stringify({ message: 'Summary deleted successfully' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200
+        })
+      } catch (error) {
+        console.error('Delete summary error:', error)
+        return new Response(JSON.stringify({ error: 'Failed to delete summary' }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 500
+        })
+      }
+    }
+
     // Default response for unmatched routes
     console.log(`Unmatched route: ${method} ${path}`)
     return new Response(
@@ -3227,18 +4412,28 @@ serve(async (req) => {
           '/auth/login',
           '/auth/me',
           '/qa/ask',
-          '/qa/sessions',
-          '/qa/sessions/:id',
+          '/qa/sessions (GET, POST)',
+          '/qa/sessions/:id (GET, DELETE)',
           '/qa/sessions/:id/cleanup',
           '/qa/sessions/:id/questions',
+          '/qa/questions/:id/feedback (PUT)',
           '/free/ask',
           '/free/analyze-risks',
-          '/free/session',
+          '/free/session (GET, POST)',
+          '/free/session/:id (DELETE)',
           '/free/upload',
           '/free/cleanup-orphaned',
           '/upload',
           '/upload/supabase',
-          '/upload/direct'
+          '/upload/direct',
+          '/compare (GET, POST)',
+          '/compare/:id (GET, DELETE)',
+          '/summarize (GET, POST)',
+          '/summarize/:id (GET, DELETE)',
+          '/risks (GET)',
+          '/risks/:id (GET, DELETE)',
+          '/documents (GET)',
+          '/documents/:id (GET, DELETE)'
         ]
       }),
       { 
